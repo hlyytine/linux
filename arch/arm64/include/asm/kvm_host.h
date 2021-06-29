@@ -1765,5 +1765,7 @@ void check_feature_map(void);
 #define HYP_ALLOC_MGT_HEAP_ID          0
 
 unsigned long __pkvm_reclaim_hyp_alloc_mgt(unsigned long nr_pages);
+struct kvm_iommu_ops;
+int kvm_iommu_register_driver(struct kvm_iommu_ops *hyp_ops);
 
 #endif /* __ARM64_KVM_HOST_H__ */
