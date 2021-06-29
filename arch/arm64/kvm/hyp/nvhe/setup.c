@@ -14,6 +14,7 @@
 #include <nvhe/early_alloc.h>
 #include <nvhe/ffa.h>
 #include <nvhe/gfp.h>
+#include <nvhe/iommu.h>
 #include <nvhe/memory.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/mm.h>
@@ -389,6 +390,10 @@ void __noreturn __pkvm_init_finalise(void)
 		goto out;
 
 	ret = pin_host_tables();
+	if (ret)
+		goto out;
+
+	ret = kvm_iommu_init();
 	if (ret)
 		goto out;
 
