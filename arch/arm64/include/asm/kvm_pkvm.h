@@ -17,6 +17,7 @@
 #define HYP_MEMBLOCK_REGIONS 128
 #define PVMFW_INVALID_LOAD_ADDR	(-1)
 
+int pkvm_vm_ioctl_enable_cap(struct kvm *kvm,struct kvm_enable_cap *cap);
 int pkvm_init_host_vm(struct kvm *kvm, unsigned long type);
 int pkvm_create_hyp_vm(struct kvm *kvm);
 void pkvm_finalize_destroy_hyp_vm(struct kvm *kvm);
@@ -42,6 +43,7 @@ static inline bool kvm_pvm_ext_allowed(long ext)
 	case KVM_CAP_ARM_SVE:
 	case KVM_CAP_ARM_PTRAUTH_ADDRESS:
 	case KVM_CAP_ARM_PTRAUTH_GENERIC:
+	case KVM_CAP_ARM_PROTECTED_VM:
 		return true;
 	default:
 		return false;
