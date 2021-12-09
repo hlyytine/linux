@@ -86,12 +86,19 @@ int kvm_vm_ioctl_enable_cap(struct kvm *kvm,
 {
 	int r = -EINVAL;
 
-	if (cap->flags)
-		return -EINVAL;
-
 	if (kvm_vm_is_protected(kvm) && !kvm_pvm_ext_allowed(cap->cap))
 		return -EINVAL;
 
+	/* Capabilities with flags */
+	switch (cap->cap) {
+	case KVM_CAP_ARM_PROTECTED_VM:
+		return pkvm_vm_ioctl_enable_cap(kvm, cap);
+	default:
+		if (cap->flags)
+			return -EINVAL;
+	}
+
+	/* Capabilities without flags */
 	switch (cap->cap) {
 	case KVM_CAP_ARM_NISV_TO_USER:
 		r = 0;
@@ -411,6 +418,12 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		break;
 	case KVM_CAP_ARM_SUPPORTED_REG_MASK_RANGES:
 		r = BIT(0);
+		break;
+	case KVM_CAP_ARM_PROTECTED_VM:
+		if (kvm)
+			r = kvm_vm_is_protected(kvm);
+		else
+			r = is_protected_kvm_enabled();
 		break;
 	default:
 		r = 0;
