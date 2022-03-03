@@ -4128,9 +4128,7 @@ static int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		dev_err(smmu->dev, "unknown/unsupported TT endianness!\n");
 		return -ENXIO;
 	}
-	if (coherent && !disable_msipolling &&
-	    smmu->features & ARM_SMMU_FEAT_MSI)
-		smmu->options |= ARM_SMMU_OPT_MSIPOLL;
+
 	if (smmu->features & ARM_SMMU_FEAT_HYP &&
 	    cpus_have_cap(ARM64_HAS_VIRT_HOST_EXTN))
 		smmu->features |= ARM_SMMU_FEAT_E2H;
@@ -4249,9 +4247,6 @@ static int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 		smmu->features |= ARM_SMMU_FEAT_NESTING;
 
 	arm_smmu_device_iidr_probe(smmu);
-
-	if (arm_smmu_sva_supported(smmu))
-		smmu->features |= ARM_SMMU_FEAT_SVA;
 
 	dev_info(smmu->dev, "ias %lu-bit, oas %lu-bit (features 0x%08x)\n",
 		 smmu->ias, smmu->oas, smmu->features);
@@ -4535,6 +4530,12 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	ret = arm_smmu_device_hw_probe(smmu);
 	if (ret)
 		return ret;
+
+	if (arm_smmu_sva_supported(smmu))
+		smmu->features |= ARM_SMMU_FEAT_SVA;
+
+	if (disable_msipolling)
+		smmu->options &= ~ARM_SMMU_OPT_MSIPOLL;
 
 	/* Initialise in-memory data structures */
 	ret = arm_smmu_init_structures(smmu);
