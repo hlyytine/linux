@@ -18,6 +18,7 @@ struct host_arm_smmu_device {
 	struct arm_smmu_device		smmu;
 	pkvm_handle_t			id;
 	u32				boot_gbpa;
+	struct kvm_power_domain         power_domain;
 };
 
 #define smmu_to_host(_smmu) \
@@ -251,6 +252,26 @@ static struct iommu_ops kvm_arm_smmu_ops = {
 	.default_domain 	= &kvm_arm_smmu_def_domain,
 };
 
+static int kvm_arm_probe_power_domain(struct device *dev,
+				      struct kvm_power_domain *pd)
+{
+	int ret;
+	struct of_phandle_args args;
+
+	if (!of_get_property(dev->of_node, "power-domains", NULL))
+		return 0;
+
+	ret = of_parse_phandle_with_args(dev->of_node, "power-domains",
+					 "#power-domain-cells", 0, &args);
+	if (ret)
+		return ret;
+
+	pd->type = KVM_POWER_DOMAIN_HOST_HVC;
+	pd->device_id = kvm_arm_smmu_cur;
+	of_node_put(args.np);
+	return ret;
+}
+
 static int kvm_arm_smmu_probe(struct platform_device *pdev)
 {
 	int ret;
@@ -275,6 +296,10 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 	smmu->dev = dev;
 
 	ret = arm_smmu_fw_probe(pdev, smmu);
+	if (ret)
+		return ret;
+
+	ret = kvm_arm_probe_power_domain(dev, &host_smmu->power_domain);
 	if (ret)
 		return ret;
 
@@ -331,6 +356,7 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 	hyp_smmu->mmio_addr = ioaddr;
 	hyp_smmu->mmio_size = size;
 	hyp_smmu->features = smmu->features;
+	hyp_smmu->power_domain = host_smmu->power_domain;
 	kvm_arm_smmu_cur++;
 
 	return arm_smmu_register_iommu(smmu, &kvm_arm_smmu_ops, ioaddr);
