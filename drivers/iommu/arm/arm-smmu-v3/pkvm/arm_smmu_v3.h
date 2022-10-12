@@ -4,6 +4,8 @@
 
 #include <asm/kvm_asm.h>
 
+#include <kvm/power_domain.h>
+
 #ifdef __KVM_NVHE_HYPERVISOR__
 #include <nvhe/spinlock.h>
 #endif
@@ -42,6 +44,8 @@ struct hyp_arm_smmu_v3_device {
 #else
 	u32			lock;
 #endif
+	struct kvm_power_domain	power_domain;
+	bool			power_is_off;
 };
 
 extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v3_count);
