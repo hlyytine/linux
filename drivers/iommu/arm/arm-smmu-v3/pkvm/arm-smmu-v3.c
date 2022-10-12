@@ -126,7 +126,12 @@ static int smmu_sync_cmd(struct hyp_arm_smmu_v3_device *smmu)
 static int smmu_send_cmd(struct hyp_arm_smmu_v3_device *smmu,
 			 struct arm_smmu_cmdq_ent *cmd)
 {
-	int ret = smmu_add_cmd(smmu, cmd);
+	int ret;
+
+	if (smmu->power_is_off)
+		return 0;
+
+	ret = smmu_add_cmd(smmu, cmd);
 
 	if (ret)
 		return ret;
@@ -147,6 +152,10 @@ static int smmu_tlb_inv_range_smmu(struct hyp_arm_smmu_v3_device *smmu,
 	int ret;
 
 	hyp_spin_lock(&smmu->lock);
+	if (smmu->power_is_off) {
+		hyp_spin_unlock(&smmu->lock);
+		return 0;
+	}
 	arm_smmu_tlb_inv_build(cmd, iova, size, granule,
 			       idmap_pgtable->cfg.pgsize_bitmap, smmu,
 			       __smmu_add_cmd, NULL);
@@ -411,6 +420,38 @@ static int smmu_init_evtq(struct hyp_arm_smmu_v3_device *smmu)
 				  hyp_phys_to_virt(smmu->evtq.base_dma + evtq_size));
 }
 
+static int smmu_power_on(struct kvm_power_domain *pd)
+{
+	/*
+	 * We currently assume that the device retains its architectural state
+	 * across power off, hence no save/restore.
+	 */
+	struct hyp_arm_smmu_v3_device *smmu = container_of(pd, struct hyp_arm_smmu_v3_device,
+							   power_domain);
+
+	hyp_spin_lock(&smmu->lock);
+	smmu->power_is_off = false;
+	hyp_spin_unlock(&smmu->lock);
+	return 0;
+}
+
+static int smmu_power_off(struct kvm_power_domain *pd)
+{
+	struct hyp_arm_smmu_v3_device *smmu = container_of(pd, struct hyp_arm_smmu_v3_device,
+							   power_domain);
+
+	hyp_spin_lock(&smmu->lock);
+	smmu->power_is_off = true;
+	hyp_spin_unlock(&smmu->lock);
+	return 0;
+}
+
+
+static const struct kvm_power_domain_ops smmu_power_ops = {
+	.power_on       = smmu_power_on,
+	.power_off      = smmu_power_off,
+};
+
 static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 {
 	int i;
@@ -447,6 +488,10 @@ static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 		goto out_err;
 
 	ret = smmu_init_strtab(smmu);
+	if (ret)
+		goto out_err;
+
+	ret = pkvm_init_power_domain(&smmu->power_domain, &smmu_power_ops);
 	if (ret)
 		goto out_err;
 
