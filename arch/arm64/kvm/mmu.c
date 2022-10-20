@@ -19,6 +19,7 @@
 #include <asm/kvm_ras.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_emulate.h>
+#include <asm/kvm_pkvm.h>
 #include <asm/virt.h>
 
 #include "trace.h"
