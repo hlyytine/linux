@@ -87,7 +87,7 @@ void __init kvm_hyp_reserve(void)
 
 static void __pkvm_destroy_hyp_vm(struct kvm *host_kvm)
 {
-	if (host_kvm->arch.pkvm.handle) {
+	if (pkvm_is_hyp_created(host_kvm)) {
 		WARN_ON(kvm_call_hyp_nvhe(__pkvm_start_teardown_vm,
 					  host_kvm->arch.pkvm.handle));
 		WARN_ON(kvm_call_hyp_nvhe(__pkvm_finalize_teardown_vm,
@@ -166,7 +166,7 @@ static int __pkvm_create_hyp_vm(struct kvm *host_kvm)
 	if (ret < 0)
 		goto free_vm;
 
-	host_kvm->arch.pkvm.handle = ret;
+	WRITE_ONCE(host_kvm->arch.pkvm.handle, ret);
 	host_kvm->arch.pkvm.stage2_teardown_mc.flags |= HYP_MEMCACHE_ACCOUNT_STAGE2;
 	kvm_account_pgtable_pages(pgd, pgd_sz / PAGE_SIZE);
 
@@ -178,12 +178,17 @@ free_pgd:
 	return ret;
 }
 
+bool pkvm_is_hyp_created(struct kvm *host_kvm)
+{
+	return READ_ONCE(host_kvm->arch.pkvm.handle);
+}
+
 int pkvm_create_hyp_vm(struct kvm *host_kvm)
 {
 	int ret = 0;
 
 	mutex_lock(&host_kvm->arch.config_lock);
-	if (!host_kvm->arch.pkvm.handle)
+	if (!pkvm_is_hyp_created(host_kvm))
 		ret = __pkvm_create_hyp_vm(host_kvm);
 	mutex_unlock(&host_kvm->arch.config_lock);
 
