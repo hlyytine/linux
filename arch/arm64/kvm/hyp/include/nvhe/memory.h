@@ -24,6 +24,7 @@ enum pkvm_page_state {
 
 	/* Meta-states which aren't encoded directly in the PTE's SW bits */
 	PKVM_NOPAGE			= BIT(2),
+	PKVM_PAGE_RESTRICTED_PROT	= BIT(3),
 };
 #define PKVM_PAGE_META_STATES_MASK	(~__PKVM_PAGE_RESERVED)
 
