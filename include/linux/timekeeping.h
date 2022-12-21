@@ -285,6 +285,8 @@ static inline bool ktime_get_aux_ts64(clockid_t id, struct timespec64 *kt) { ret
  * @cs_id:	Clocksource ID
  * @clock_was_set_seq:	The sequence number of clock-was-set events
  * @cs_was_changed_seq:	The sequence number of clocksource change events
+ * @mono_shift:	The monotonic clock slope shift
+ * @mono_mult:	The monotonic clock slope mult
  */
 struct system_time_snapshot {
 	u64			cycles;
@@ -294,6 +296,8 @@ struct system_time_snapshot {
 	enum clocksource_ids	cs_id;
 	unsigned int		clock_was_set_seq;
 	u8			cs_was_changed_seq;
+	u32			mono_shift;
+	u32			mono_mult;
 };
 
 /**
