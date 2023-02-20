@@ -1317,8 +1317,21 @@ static int __guest_request_page_transition(struct pkvm_checked_mem_transition *c
 	if (data.ipa_start != tx->initiator.addr)
 		return -EINVAL;
 
-	checked_tx->completer_addr = data.phys_start;
-	checked_tx->size = min_t(u64, data.size, tx->size);
+	switch (checked_tx->tx->completer.id) {
+	case PKVM_ID_HOST:
+		checked_tx->completer_addr = data.phys_start;
+		checked_tx->size = min_t(u64, data.size, tx->size);
+		break;
+	case PKVM_ID_HYP:
+		checked_tx->completer_addr = (u64)__hyp_va(data.phys_start);
+		checked_tx->size = min_t(u64, data.size, tx->size);
+		break;
+	case PKVM_ID_FFA:
+		/* We don't handle secure page tables */
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -2159,6 +2172,60 @@ int __pkvm_host_donate_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu)
 
 	guest_unlock_component(vm);
 	host_unlock_component();
+
+	return ret;
+}
+
+int __pkvm_guest_share_ffa(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
+{
+	int ret;
+	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
+	struct pkvm_mem_share share = {
+		.tx	= {
+			.size		= PAGE_SIZE,
+			.initiator	= {
+				.id	= PKVM_ID_GUEST,
+				.addr	= ipa,
+				.guest  = {
+					.hyp_vcpu = vcpu,
+				},
+			},
+			.completer	= {
+				.id	= PKVM_ID_FFA,
+			},
+		},
+	};
+
+	guest_lock_component(vm);
+	ret = do_share(&share, NULL);
+	guest_unlock_component(vm);
+
+	return ret;
+}
+
+int __pkvm_guest_unshare_ffa(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
+{
+	int ret;
+	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
+	struct pkvm_mem_share share = {
+		.tx	= {
+			.size		= PAGE_SIZE,
+			.initiator	= {
+				.id	= PKVM_ID_GUEST,
+				.addr	= ipa,
+				.guest  = {
+					.hyp_vcpu = vcpu,
+				},
+			},
+			.completer	= {
+				.id	= PKVM_ID_FFA,
+			},
+		},
+	};
+
+	guest_lock_component(vm);
+	ret = do_unshare(&share, NULL);
+	guest_unlock_component(vm);
 
 	return ret;
 }

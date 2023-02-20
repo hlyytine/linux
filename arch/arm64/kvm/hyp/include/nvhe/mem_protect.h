@@ -76,6 +76,8 @@ int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa,
 			       size_t size, size_t *unguarded);
 int __pkvm_guest_share_hyp(struct pkvm_hyp_vcpu *vcpu, u64 ipa);
 int __pkvm_guest_unshare_hyp(struct pkvm_hyp_vcpu *vcpu, u64 ipa);
+int __pkvm_guest_share_ffa(struct pkvm_hyp_vcpu *vcpu, u64 ipa);
+int __pkvm_guest_unshare_ffa(struct pkvm_hyp_vcpu *vcpu, u64 ipa);
 bool __pkvm_check_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu);
 int __pkvm_guest_relinquish_to_host(struct pkvm_hyp_vcpu *vcpu,
 				    u64 ipa, u64 *ppa);
