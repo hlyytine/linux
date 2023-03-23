@@ -212,6 +212,15 @@ static void __pkvm_finalize_destroy_hyp_vm(struct kvm *host_kvm)
 	free_hyp_memcache(&host_kvm->arch.pkvm.stage2_teardown_mc);
 }
 
+
+static void __pkvm_vcpu_hyp_created(struct kvm_vcpu *vcpu)
+{
+	vcpu_set_flag(vcpu, VCPU_PKVM_FINALIZED);
+
+	if (vcpu_is_protected(vcpu))
+		vcpu->arch.sve_state = NULL;
+}
+
 static int __pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu)
 {
 	size_t hyp_vcpu_sz = PAGE_ALIGN(PKVM_HYP_VCPU_SIZE);
@@ -227,7 +236,7 @@ static int __pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu)
 
 	ret = kvm_call_hyp_nvhe(__pkvm_init_vcpu, handle, vcpu, hyp_vcpu);
 	if (!ret)
-		vcpu_set_flag(vcpu, VCPU_PKVM_FINALIZED);
+		__pkvm_vcpu_hyp_created(vcpu);
 	else
 		free_pages_exact(hyp_vcpu, hyp_vcpu_sz);
 
