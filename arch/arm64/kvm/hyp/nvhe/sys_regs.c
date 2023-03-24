@@ -20,6 +20,7 @@
  */
 u64 id_aa64pfr0_el1_sys_val;
 u64 id_aa64pfr1_el1_sys_val;
+u64 id_aa64zfr0_el1_sys_val;
 u64 id_aa64isar0_el1_sys_val;
 u64 id_aa64isar1_el1_sys_val;
 u64 id_aa64isar2_el1_sys_val;
@@ -166,18 +167,6 @@ static const struct pvm_ftr_bits pvmid_aa64isar2[] = {
 };
 
 static const struct pvm_ftr_bits pvmid_aa64zfr0[] = {
-	MAX_FEAT(ID_AA64ZFR0_EL1, SVEver, SVE2p2),
-	MAX_FEAT(ID_AA64ZFR0_EL1, AES, AES2),
-	MAX_FEAT(ID_AA64ZFR0_EL1, EltPerm, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, BitPerm, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, BF16, EBF16),
-	MAX_FEAT(ID_AA64ZFR0_EL1, B16B16, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, SHA3, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, SM4, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, I8MM, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, F16MM, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, F32MM, IMP),
-	MAX_FEAT(ID_AA64ZFR0_EL1, F64MM, IMP),
 	FEAT_END
 };
 
