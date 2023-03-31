@@ -124,8 +124,9 @@ static void timer_set_cval(struct arch_timer_context *ctxt, u64 cval)
 
 static void timer_set_offset(struct arch_timer_context *ctxt, u64 offset)
 {
-	if (!ctxt->offset.vm_offset) {
-		WARN(offset, "timer %ld\n", arch_timer_ctx_index(ctxt));
+	if (unlikely(!ctxt->offset.vm_offset)) {
+		WARN(offset && !kvm_vm_is_protected(ctxt->vcpu->kvm),
+			"timer %ld\n", arch_timer_ctx_index(ctxt));
 		return;
 	}
 
@@ -765,7 +766,8 @@ void kvm_timer_vcpu_init(struct kvm_vcpu *vcpu)
 	struct arch_timer_context *ptimer = vcpu_ptimer(vcpu);
 
 	vtimer->vcpu = vcpu;
-	vtimer->offset.vm_offset = &vcpu->kvm->arch.timer_data.voffset;
+	vtimer->offset.vm_offset = !kvm_vm_is_protected(vcpu->kvm) ?
+		 &vcpu->kvm->arch.timer_data.voffset : NULL;
 	ptimer->vcpu = vcpu;
 
 	/* Synchronize cntvoff across all vtimers of a VM. */
