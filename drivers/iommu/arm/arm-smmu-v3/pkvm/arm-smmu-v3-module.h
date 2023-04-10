@@ -41,8 +41,8 @@ extern const struct pkvm_module_ops		*mod_ops;
 #define hyp_pin_shared_mem(x, y)		CALL_FROM_OPS(pin_shared_mem, x, y)
 #define kvm_iommu_iotlb_gather_add_page(x, y, z, w) \
 						CALL_FROM_OPS(iommu_iotlb_gather_add_page, x, y, z, w)
-#define __pkvm_host_use_dma(x, y)		CALL_FROM_OPS(pkvm_use_dma, x, y)
-#define __pkvm_host_unuse_dma(x, y)		CALL_FROM_OPS(pkvm_unuse_dma, x, y)
+#define iommu_pkvm_use_dma(x, y)		CALL_FROM_OPS(pkvm_use_dma, x, y)
+#define iommu_pkvm_unuse_dma(x, y)		CALL_FROM_OPS(pkvm_unuse_dma, x, y)
 #define kvm_iommu_snapshot_host_stage2()	CALL_FROM_OPS(iommu_snapshot_host_stage2)
 #undef hyp_smp_processor_id
 #define hyp_smp_processor_id()			CALL_FROM_OPS(hyp_smp_processor_id)

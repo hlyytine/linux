@@ -28,7 +28,7 @@ static void kvm_iommu_flush_unmap_cache(struct kvm_iommu_paddr_cache *cache)
 {
 	while (cache->ptr) {
 		cache->ptr--;
-		WARN_ON(__pkvm_host_unuse_dma(cache->paddr[cache->ptr],
+		WARN_ON(iommu_pkvm_unuse_dma(cache->paddr[cache->ptr],
 					      cache->pgsize[cache->ptr]));
 	}
 }
@@ -1247,7 +1247,7 @@ static int smmu_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iov
 	if (!IS_ALIGNED(iova | paddr | pgsize, granule))
 		return -EINVAL;
 
-	__pkvm_host_use_dma(paddr, pgsize * pgcount);
+	iommu_pkvm_use_dma(paddr, pgsize * pgcount);
 	hyp_spin_lock(&smmu_domain->pgt_lock);
 	while (pgcount) {
 		mapped = 0;
@@ -1266,7 +1266,7 @@ static int smmu_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iov
 	hyp_spin_unlock(&smmu_domain->pgt_lock);
 
 	if (pgcount)
-		__pkvm_host_unuse_dma(paddr, pgsize * pgcount);
+		iommu_pkvm_unuse_dma(paddr, pgsize * pgcount);
 
 	return ret;
 }

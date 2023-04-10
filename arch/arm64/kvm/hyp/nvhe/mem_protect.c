@@ -383,7 +383,11 @@ int __pkvm_guest_relinquish_to_host(struct pkvm_hyp_vcpu *vcpu,
 	addr = ALIGN_DOWN(ipa, kvm_granule_size(level));
 	phys = kvm_pte_to_phys(pte);
 	phys += ipa - addr;
-
+	/* page might be used for DMA! */
+	if (hyp_page_count(hyp_phys_to_virt(phys))) {
+		ret = -EBUSY;
+		goto end;
+	}
 	state = guest_get_page_state(pte, addr);
 	if (state != PKVM_PAGE_OWNED) {
 		ret = -EPERM;
@@ -2866,21 +2870,21 @@ teardown:
 	return ret;
 }
 
-static void __pkvm_host_use_dma_page(phys_addr_t phys_addr)
+static void __pkvm_use_dma_page(phys_addr_t phys_addr)
 {
 	struct hyp_page *p = hyp_phys_to_page(phys_addr);
 
 	hyp_page_ref_inc(p);
 }
 
-static void __pkvm_host_unuse_dma_page(phys_addr_t phys_addr)
+static void __pkvm_unuse_dma_page(phys_addr_t phys_addr)
 {
 	struct hyp_page *p = hyp_phys_to_page(phys_addr);
 
 	hyp_page_ref_dec(p);
 }
 
-static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size)
+static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size, struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	int i;
 	int ret = 0;
@@ -2902,6 +2906,8 @@ static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size)
 	if (!reg) {
 		enum kvm_pgtable_prot prot;
 
+		if (hyp_vcpu)
+			return -EINVAL;
 		for (i = 0; i < nr_pages; i++) {
 			u64 addr = phys_addr + i * PAGE_SIZE;
 
@@ -2925,16 +2931,19 @@ static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size)
 			enum pkvm_page_state state;
 			phys_addr_t this_addr = phys_addr + i * PAGE_SIZE;
 
-			state = get_host_state(hyp_phys_to_page(this_addr));
-			if (state != PKVM_PAGE_OWNED) {
-				ret = -EPERM;
-				break;
+			/* For VMs, we know if we reach this point the VM has access to the page. */
+			if (!hyp_vcpu) {
+				state = get_host_state(hyp_phys_to_page(this_addr));
+				if (state != PKVM_PAGE_OWNED) {
+					ret = -EPERM;
+					break;
+				}
 			}
 		}
 		if (ret)
 			return ret;
 		for (i = 0; i < nr_pages; i++)
-			__pkvm_host_use_dma_page(phys_addr + i * PAGE_SIZE);
+			__pkvm_use_dma_page(phys_addr + i * PAGE_SIZE);
 	}
 
 	return ret;
@@ -2956,25 +2965,27 @@ static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size)
  * similar checks are needed in host_request_unshare() and
  * host_ack_unshare()
  */
-int __pkvm_host_use_dma(phys_addr_t phys_addr, size_t size)
+int __pkvm_use_dma(phys_addr_t phys_addr, size_t size, struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	int ret;
 
 	host_lock_component();
-	ret = __pkvm_use_dma_locked(phys_addr, size);
+	ret = __pkvm_use_dma_locked(phys_addr, size, hyp_vcpu);
 	host_unlock_component();
 	return ret;
 }
 
-int __pkvm_host_unuse_dma(phys_addr_t phys_addr, size_t size)
+int __pkvm_unuse_dma(phys_addr_t phys_addr, size_t size, struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	int i;
 	size_t nr_pages = size >> PAGE_SHIFT;
 
 	if (WARN_ON(!PAGE_ALIGNED(phys_addr | size)))
 		return -EINVAL;
-	if (!range_is_memory(phys_addr, phys_addr + size))
+	if (!range_is_memory(phys_addr, phys_addr + size)) {
+		WARN_ON(hyp_vcpu);
 		return 0;
+	}
 	host_lock_component();
 	/*
 	 * We end up here after the caller successfully unmapped the page from
@@ -2982,7 +2993,7 @@ int __pkvm_host_unuse_dma(phys_addr_t phys_addr, size_t size)
 	 * in the host s2, there can be no failure.
 	 */
 	for (i = 0; i < nr_pages; i++)
-		__pkvm_host_unuse_dma_page(phys_addr + i * PAGE_SIZE);
+		__pkvm_unuse_dma_page(phys_addr + i * PAGE_SIZE);
 
 	host_unlock_component();
 	return 0;
