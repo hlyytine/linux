@@ -1905,6 +1905,9 @@ int kvm_iommu_attach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
  */
 #define KVM_IOMMU_MAX_DOMAINS		512
 
+/* Reserve type for IOMMU core, which means that is a guest. */
+#define KVM_IOMMU_DOMAIN_ANY_TYPE              1
+
 #ifdef CONFIG_ARM_SMMU_V3_PKVM
 size_t smmu_hyp_pgt_pages(void);
 #endif
