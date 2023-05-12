@@ -1318,6 +1318,16 @@ int kvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr,
 	return ret;
 }
 
+int kvm_pgtable_stage2_set_swbits(struct kvm_pgtable *pgt, u64 addr,
+				  u64 size, u64 swbits)
+{
+	if (swbits & ~KVM_PTE_LEAF_ATTR_HI_SW)
+		return -EINVAL;
+
+	return stage2_update_leaf_attrs(pgt, addr, size, swbits, KVM_PTE_LEAF_ATTR_HI_SW,
+				       NULL, NULL, 0);
+}
+
 static int stage2_flush_walker(const struct kvm_pgtable_visit_ctx *ctx,
 			       enum kvm_pgtable_walk_flags visit)
 {

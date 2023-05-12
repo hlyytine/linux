@@ -652,6 +652,12 @@ int kvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr,
 				   enum kvm_pgtable_prot prot);
 
 /**
+ * TODO: desc
+ */
+int kvm_pgtable_stage2_set_swbits(struct kvm_pgtable *pgt, u64 addr,
+				  u64 size, u64 swbits);
+
+/**
  * kvm_pgtable_stage2_flush_range() - Clean and invalidate data cache to Point
  * 				      of Coherency for guest stage-2 address
  *				      range.
