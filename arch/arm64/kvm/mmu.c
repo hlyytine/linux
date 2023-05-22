@@ -1108,17 +1108,17 @@ void kvm_free_stage2_pgd(struct kvm_s2_mmu *mmu)
 	}
 }
 
-static void hyp_mc_free_fn(void *addr, void *mc)
+static void hyp_mc_free_fn(void *addr, void *mc, unsigned long order)
 {
 	struct kvm_hyp_memcache *memcache = mc;
 
 	if (memcache->flags & HYP_MEMCACHE_ACCOUNT_STAGE2)
 		kvm_account_pgtable_pages(addr, -1);
 
-	free_page((unsigned long)addr);
+	free_pages((unsigned long)addr, order);
 }
 
-static void *hyp_mc_alloc_fn(void *mc)
+static void *hyp_mc_alloc_fn(void *mc, unsigned long order)
 {
 	struct kvm_hyp_memcache *memcache = mc;
 	gfp_t gfp_mask;
@@ -1126,7 +1126,7 @@ static void *hyp_mc_alloc_fn(void *mc)
 
 	gfp_mask = memcache->flags & HYP_MEMCACHE_ACCOUNT_KMEMCG ?
 			GFP_KERNEL_ACCOUNT : GFP_KERNEL;
-	addr = (void *)__get_free_page(gfp_mask);
+	addr = (void *)__get_free_pages(gfp_mask, order);
 	if (addr && memcache->flags & HYP_MEMCACHE_ACCOUNT_STAGE2)
 		kvm_account_pgtable_pages(addr, 1);
 
@@ -1142,10 +1142,14 @@ void free_hyp_memcache(struct kvm_hyp_memcache *mc)
 	__free_hyp_memcache(mc, hyp_mc_free_fn, kvm_host_va, mc);
 }
 
-int topup_hyp_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages)
+int topup_hyp_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages,
+		       unsigned long order)
 {
 	if (!is_protected_kvm_enabled())
 		return 0;
+
+	if (order > PAGE_SHIFT)
+		return -E2BIG;
 
 	if (!mc->mapping) {
 		mc->mapping = kzalloc(sizeof(struct pkvm_mapping), GFP_KERNEL_ACCOUNT);
@@ -1154,7 +1158,7 @@ int topup_hyp_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages)
 	}
 
 	return __topup_hyp_memcache(mc, min_pages, hyp_mc_alloc_fn,
-				    kvm_host_pa, mc);
+				    kvm_host_pa, mc, order);
 }
 
 /**
@@ -1519,7 +1523,7 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	int ret, nr_pages;
 
 	nr_pages = hyp_memcache->nr_pages;
-	ret = topup_hyp_memcache(hyp_memcache, kvm_mmu_cache_min_pages(mmu));
+	ret = topup_hyp_memcache(hyp_memcache, kvm_mmu_cache_min_pages(mmu), 0);
 	if (ret)
 		return -ENOMEM;
 
@@ -1629,7 +1633,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 		} else {
 			memcache = hyp_memcache;
 			nr_pages = hyp_memcache->nr_pages;
-			ret = topup_hyp_memcache(memcache, min_pages);
+			ret = topup_hyp_memcache(memcache, min_pages, 0);
 			if (ret)
 				return ret;
 			nr_pages = hyp_memcache->nr_pages - nr_pages;
