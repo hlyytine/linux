@@ -1483,11 +1483,15 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_s2_mmu *mmu =  &kvm->arch.mmu;
 	struct page *page;
-	int ret;
+	int ret, nr_pages;
 
+	nr_pages = hyp_memcache->nr_pages;
 	ret = topup_hyp_memcache(hyp_memcache, kvm_mmu_cache_min_pages(mmu));
 	if (ret)
 		return -ENOMEM;
+
+	nr_pages = hyp_memcache->nr_pages - nr_pages;
+	atomic64_add(nr_pages << PAGE_SHIFT, &kvm->stat.protected_hyp_mem);
 
 	ret = account_locked_vm(mm, 1, true);
 	if (ret)
