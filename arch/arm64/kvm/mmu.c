@@ -1495,11 +1495,15 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_s2_mmu *mmu =  &kvm->arch.mmu;
 	struct page *page;
-	int ret;
+	int ret, nr_pages;
 
+	nr_pages = hyp_memcache->nr_pages;
 	ret = topup_hyp_memcache(hyp_memcache, kvm_mmu_cache_min_pages(mmu));
 	if (ret)
 		return -ENOMEM;
+
+	nr_pages = hyp_memcache->nr_pages - nr_pages;
+	atomic64_add(nr_pages << PAGE_SHIFT, &kvm->stat.protected_hyp_mem);
 
 	ret = account_locked_vm(mm, 1, true);
 	if (ret)
@@ -1562,11 +1566,12 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	bool write_fault, writable, force_pte = false;
 	bool exec_fault, mte_allowed, is_vma_cacheable;
 	bool s2_force_noncacheable = false, vfio_allow_any_uc = false;
-	unsigned long mmu_seq;
+	unsigned long mmu_seq, nr_pages;
 	phys_addr_t ipa = fault_ipa;
 	struct kvm *kvm = vcpu->kvm;
 	struct vm_area_struct *vma;
 	short vma_shift;
+	struct kvm_hyp_memcache *hyp_memcache = &vcpu->arch.stage2_mc;
 	void *memcache;
 	gfn_t gfn;
 	kvm_pfn_t pfn;
@@ -1598,13 +1603,17 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	if (!fault_is_perm || (logging_active && write_fault)) {
 		int min_pages = kvm_mmu_cache_min_pages(vcpu->arch.hw_mmu);
 
-		if (!is_protected_kvm_enabled())
+		if (!is_protected_kvm_enabled()) {
 			ret = kvm_mmu_topup_memory_cache(memcache, min_pages);
-		else
+		} else {
+			memcache = hyp_memcache;
+			nr_pages = hyp_memcache->nr_pages;
 			ret = topup_hyp_memcache(memcache, min_pages);
-
-		if (ret)
-			return ret;
+			if (ret)
+				return ret;
+			nr_pages = hyp_memcache->nr_pages - nr_pages;
+			atomic64_add(nr_pages << PAGE_SHIFT, &kvm->stat.protected_hyp_mem);
+		}
 	}
 
 	/*
