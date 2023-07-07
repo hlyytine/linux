@@ -1217,6 +1217,9 @@ static int check_share(const struct pkvm_mem_share *share,
 	const struct pkvm_mem_transition *tx = &share->tx;
 	int ret;
 
+	if (!tx->size)
+		return -EINVAL;
+
 	switch (tx->initiator.id) {
 	case PKVM_ID_HOST:
 		ret = host_request_owned_transition(&checked_tx->completer_addr, tx);
@@ -1336,6 +1339,9 @@ static int check_unshare(struct pkvm_mem_share *share,
 {
 	const struct pkvm_mem_transition *tx = &share->tx;
 	int ret;
+
+	if (!tx->size)
+		return -EINVAL;
 
 	switch (tx->initiator.id) {
 	case PKVM_ID_HOST:
@@ -1566,13 +1572,14 @@ int __pkvm_host_share_hyp(u64 pfn)
 	return ret;
 }
 
-int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
+int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa, u64 size,
+			    u64 *shared)
 {
 	int ret;
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
 	struct pkvm_mem_share share = {
 		.tx	= {
-			.size		= PAGE_SIZE,
+			.size		= size,
 			.initiator	= {
 				.id	= PKVM_ID_GUEST,
 				.addr	= ipa,
@@ -1586,12 +1593,11 @@ int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
 		},
 		.completer_prot	= PKVM_HOST_MEM_PROT,
 	};
-	u64 shared;
 
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = do_share(&share, &shared);
+	ret = do_share(&share, shared);
 
 	guest_unlock_component(vm);
 	host_unlock_component();
@@ -1599,13 +1605,14 @@ int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
 	return ret;
 }
 
-int __pkvm_guest_unshare_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
+int __pkvm_guest_unshare_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa, u64 size,
+			      u64 *unshared)
 {
 	int ret;
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
 	struct pkvm_mem_share share = {
 		.tx	= {
-			.size		= PAGE_SIZE,
+			.size		= size,
 			.initiator	= {
 				.id	= PKVM_ID_GUEST,
 				.addr	= ipa,
@@ -1619,12 +1626,11 @@ int __pkvm_guest_unshare_host(struct pkvm_hyp_vcpu *vcpu, u64 ipa)
 		},
 		.completer_prot	= PKVM_HOST_MEM_PROT,
 	};
-	u64 unshared;
 
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = do_unshare(&share, &unshared);
+	ret = do_unshare(&share, unshared);
 
 	guest_unlock_component(vm);
 	host_unlock_component();
