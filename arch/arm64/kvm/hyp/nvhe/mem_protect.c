@@ -1182,23 +1182,11 @@ static int guest_request_unshare(struct pkvm_checked_mem_transition *checked_tx)
 static int __guest_initiate_page_transition(const struct pkvm_checked_mem_transition *checked_tx,
 					    enum pkvm_page_state state)
 {
-	const struct pkvm_mem_transition *tx = checked_tx->tx;
-	struct pkvm_hyp_vcpu *vcpu = tx->initiator.guest.hyp_vcpu;
-	struct kvm_hyp_memcache *mc = &vcpu->vcpu.arch.pkvm_memcache;
+	struct pkvm_hyp_vcpu *vcpu = checked_tx->tx->initiator.guest.hyp_vcpu;
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
-	u64 addr = tx->initiator.addr;
-	enum kvm_pgtable_prot prot;
-	phys_addr_t phys;
-	kvm_pte_t pte;
-	int ret;
+	u64 addr = checked_tx->tx->initiator.addr;
 
-	ret = kvm_pgtable_get_leaf(&vm->pgt, addr, &pte, NULL);
-	if (ret)
-		return ret;
-
-	phys = kvm_pte_to_phys(pte);
-	prot = pkvm_mkstate(kvm_pgtable_stage2_pte_prot(pte), state);
-	return kvm_pgtable_stage2_map(&vm->pgt, addr, checked_tx->size, phys, prot, mc, 0);
+	return kvm_pgtable_stage2_set_swbits(&vm->pgt, addr, checked_tx->size, state);
 }
 
 static int guest_initiate_share(const struct pkvm_checked_mem_transition *checked_tx)
