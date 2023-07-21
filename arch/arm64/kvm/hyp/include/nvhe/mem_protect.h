@@ -96,8 +96,8 @@ int refill_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages,
 void destroy_hyp_vm_pgt(struct pkvm_hyp_vm *vm);
 void drain_hyp_pool(struct pkvm_hyp_vm *vm, struct kvm_hyp_memcache *mc);
 
-void psci_mem_protect_inc(u64 n);
-void psci_mem_protect_dec(u64 n);
+void psci_mem_protect_inc(size_t size);
+void psci_mem_protect_dec(size_t size);
 
 static __always_inline void __load_host_stage2(void)
 {

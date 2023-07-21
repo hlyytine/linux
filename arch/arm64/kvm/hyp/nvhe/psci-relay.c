@@ -247,17 +247,21 @@ static bool psci_mem_protect_active(void)
 	return psci_mem_protect(0);
 }
 
-void psci_mem_protect_inc(u64 n)
+void psci_mem_protect_inc(size_t size)
 {
+	WARN_ON(size % PAGE_SIZE);
+
 	hyp_spin_lock(&mem_protect_lock);
-	psci_mem_protect(n);
+	psci_mem_protect(size >> PAGE_SHIFT);
 	hyp_spin_unlock(&mem_protect_lock);
 }
 
-void psci_mem_protect_dec(u64 n)
+void psci_mem_protect_dec(size_t size)
 {
+	WARN_ON(size % PAGE_SIZE);
+
 	hyp_spin_lock(&mem_protect_lock);
-	psci_mem_protect(-n);
+	psci_mem_protect(-(size >> PAGE_SHIFT));
 	hyp_spin_unlock(&mem_protect_lock);
 }
 
