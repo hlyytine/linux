@@ -1771,10 +1771,11 @@ struct kvm_iommu_driver {
 };
 
 struct kvm_iommu_ops;
-int kvm_iommu_register_driver(struct kvm_iommu_ops *hyp_ops,
-			      struct kvm_iommu_driver *kern_ops,
+int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops,
 			      size_t pool_pages);
+
 int kvm_iommu_init_driver(void);
+int kvm_iommu_init_hyp(struct kvm_iommu_ops *hyp_ops);
 size_t kvm_iommu_pages(void);
 
 #endif /* __ARM64_KVM_HOST_H__ */

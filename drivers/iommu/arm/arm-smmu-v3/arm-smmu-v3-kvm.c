@@ -135,7 +135,7 @@ static int smmuv3_nesting_probe(struct platform_device *pdev)
 
 static int kvm_arm_smmu_v3_init(void)
 {
-	return 0;
+	return kvm_iommu_init_hyp(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))));
 }
 
 struct kvm_iommu_driver kvm_smmu_v3_ops = {
@@ -160,8 +160,7 @@ static int kvm_arm_smmu_v3_register(void)
 	if (ret)
 		return ret;
 
-	ret = kvm_iommu_register_driver(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))),
-					&kvm_smmu_v3_ops, nr_pages);
+	ret = kvm_iommu_register_driver(&kvm_smmu_v3_ops, nr_pages);
 	if (ret)
 		goto out_err;
 

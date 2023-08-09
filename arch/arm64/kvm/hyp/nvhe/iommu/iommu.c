@@ -78,12 +78,12 @@ static int kvm_iommu_snapshot_host_stage2(void)
 	return ret;
 }
 
-int kvm_iommu_init(void *pool_base, size_t nr_pages)
+int kvm_iommu_init(void *pool_base, size_t nr_pages, struct kvm_iommu_ops *ops)
 {
 	int ret;
 
-	if (!kvm_iommu_ops || !kvm_iommu_ops->init ||
-	    !kvm_iommu_ops->host_stage2_idmap)
+	if (!ops || !ops->init ||
+	    !ops->host_stage2_idmap)
 		return -ENODEV;
 
 	if (nr_pages) {
@@ -93,9 +93,11 @@ int kvm_iommu_init(void *pool_base, size_t nr_pages)
 			return ret;
 	}
 
-	ret = kvm_iommu_ops->init();
+	ret = ops->init();
 	if (ret)
 		return ret;
+
+	kvm_iommu_ops = ops;
 	return kvm_iommu_snapshot_host_stage2();
 }
 
