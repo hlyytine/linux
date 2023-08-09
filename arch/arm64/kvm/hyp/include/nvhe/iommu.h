@@ -36,7 +36,7 @@ struct kvm_iommu_ops {
 			   struct iommu_iotlb_gather *gather);
 };
 
-int kvm_iommu_init(void *pool_base, size_t nr_pages);
+int kvm_iommu_init(void *pool_base, size_t nr_pages, struct kvm_iommu_ops *ops);
 
 void kvm_iommu_host_stage2_idmap(phys_addr_t start, phys_addr_t end,
 				 enum kvm_pgtable_prot prot);

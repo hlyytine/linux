@@ -21,6 +21,7 @@ struct host_arm_smmu_device {
 	pkvm_handle_t			id;
 	u32				boot_gbpa;
 	struct kvm_power_domain         power_domain;
+	phys_addr_t			ioaddr;
 };
 
 struct kvm_arm_smmu_domain {
@@ -576,7 +577,6 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 {
 	int ret;
 	size_t size;
-	phys_addr_t ioaddr;
 	struct resource *res;
 	struct arm_smmu_device *smmu;
 	struct device *dev = &pdev->dev;
@@ -609,7 +609,7 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 		dev_err(dev, "unsupported MMIO region size (%pr)\n", res);
 		return -EINVAL;
 	}
-	ioaddr = res->start;
+	host_smmu->ioaddr = res->start;
 	host_smmu->id = kvm_arm_smmu_cur;
 
 	smmu->base = devm_ioremap_resource(dev, res);
@@ -668,14 +668,14 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 	hyp_smmu->pgsize_bitmap = smmu->pgsize_bitmap;
 	hyp_smmu->oas = smmu->oas;
 	hyp_smmu->ias = smmu->ias;
-	hyp_smmu->mmio_addr = ioaddr;
+	hyp_smmu->mmio_addr = host_smmu->ioaddr;
 	hyp_smmu->mmio_size = size;
 	hyp_smmu->features = smmu->features;
 	hyp_smmu->power_domain = host_smmu->power_domain;
 	hyp_smmu->ssid_bits = smmu->ssid_bits;
 	kvm_arm_smmu_cur++;
 
-	return arm_smmu_register_iommu(smmu, &kvm_arm_smmu_ops, ioaddr);
+	return 0;
 }
 
 static void kvm_arm_smmu_remove(struct platform_device *pdev)
@@ -772,6 +772,19 @@ static int smmu_put_device(struct device *dev, void *data)
 	if (host_smmu->power_domain.type != KVM_POWER_DOMAIN_NONE)
 		pm_runtime_put(dev);
 
+	return arm_smmu_register_iommu(smmu, &kvm_arm_smmu_ops, host_smmu->ioaddr);
+}
+
+/*
+ * Drop the PM references of the SMMU taken at probe
+ * after it's guaranteed the hypervisor as initialized the SMMUs.
+ */
+static int kvm_arm_smmu_v3_post_init(void)
+{
+	if (!kvm_arm_smmu_count)
+		return 0;
+	WARN_ON(driver_for_each_device(&kvm_arm_smmu_driver.driver, NULL,
+		NULL, smmu_put_device));
 	return 0;
 }
 
@@ -796,7 +809,10 @@ static int kvm_arm_smmu_v3_init_drv(void)
 	 */
 	kvm_hyp_arm_smmu_v3_smmus = kvm_arm_smmu_array;
 	kvm_hyp_arm_smmu_v3_count = kvm_arm_smmu_count;
-	return 0;
+	ret = kvm_iommu_init_hyp(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))));
+	if (ret)
+		return ret;
+	return kvm_arm_smmu_v3_post_init();
 
 err_free:
 	kvm_arm_smmu_array_free();
@@ -841,26 +857,11 @@ static int kvm_arm_smmu_v3_register(void)
 	if (ret || !kvm_arm_smmu_count)
 		return ret;
 
-	ret = kvm_iommu_register_driver(&kvm_smmu_v3_ops,
-					kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))));
+	ret = kvm_iommu_register_driver(&kvm_smmu_v3_ops);
 	if (ret)
 		kvm_arm_smmu_array_free();
 	return ret;
 };
 
-/*
- * Drop the PM references of the SMMU taken at probe
- * after it's guaranteed the hypervisor as initialized the SMMUs.
- */
-static int kvm_arm_smmu_v3_post_init(void)
-{
-	if (!kvm_arm_smmu_count)
-		return 0;
-	WARN_ON(driver_for_each_device(&kvm_arm_smmu_driver.driver, NULL,
-		NULL, smmu_put_device));
-	return 0;
-}
-
 core_initcall(kvm_arm_smmu_v3_register);
-late_initcall(kvm_arm_smmu_v3_post_init);
 MODULE_LICENSE("GPL v2");

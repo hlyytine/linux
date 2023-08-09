@@ -11,11 +11,9 @@ struct kvm_iommu_driver *iommu_driver;
 extern struct kvm_iommu_ops *kvm_nvhe_sym(kvm_iommu_ops);
 extern size_t kvm_nvhe_sym(hyp_kvm_iommu_pages);
 
-int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops, struct kvm_iommu_ops *el2_ops)
+int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops)
 {
-	int ret;
-
-	if (WARN_ON(!kern_ops || !el2_ops))
+	if (WARN_ON(!kern_ops))
 		return -EINVAL;
 
 	/*
@@ -23,12 +21,15 @@ int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops, struct kvm_iomm
 	 * Ensure memory stores happening during a driver
 	 * init are observed before executing kvm iommu callbacks.
 	 */
-	ret = cmpxchg_release(&iommu_driver, NULL, kern_ops) ? -EBUSY : 0;
-	if (ret)
-		return ret;
+	return cmpxchg_release(&iommu_driver, NULL, kern_ops) ? -EBUSY : 0;
+}
 
-	kvm_nvhe_sym(kvm_iommu_ops) = el2_ops;
-	return 0;
+int kvm_iommu_init_hyp(struct kvm_iommu_ops *hyp_ops)
+{
+	if (!hyp_ops)
+		return -EINVAL;
+
+	return kvm_call_hyp_nvhe(__pkvm_iommu_init, hyp_ops);
 }
 
 int kvm_iommu_init_driver(void)
