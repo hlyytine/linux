@@ -14,7 +14,6 @@
 #include <nvhe/early_alloc.h>
 #include <nvhe/ffa.h>
 #include <nvhe/gfp.h>
-#include <nvhe/iommu.h>
 #include <nvhe/memory.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/mm.h>
@@ -41,7 +40,7 @@ static void *host_s2_pgt_base;
 static void *ffa_proxy_pages;
 static struct kvm_pgtable_mm_ops pkvm_pgtable_mm_ops;
 static struct hyp_pool hpool;
-static void *iommu_base;
+void *iommu_base;
 
 static int divide_memory_pool(void *virt, unsigned long size)
 {
@@ -398,10 +397,6 @@ void __noreturn __pkvm_init_finalise(void)
 		goto out;
 
 	ret = pin_host_tables();
-	if (ret)
-		goto out;
-
-	ret = kvm_iommu_init(iommu_base, hyp_kvm_iommu_pages);
 	if (ret)
 		goto out;
 
