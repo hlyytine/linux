@@ -1765,6 +1765,15 @@ static void handle___pkvm_iommu_init(struct kvm_cpu_context *host_ctxt)
 	cpu_reg(host_ctxt, 1) = kvm_iommu_init(iommu_base, hyp_kvm_iommu_pages, ops);
 }
 
+static void handle___pkvm_devices_init(struct kvm_cpu_context *host_ctxt)
+{
+	/*
+	 * Devices must be initialised after the IOMMUs driver is initialised.
+	 * We do this in a separate HVC to avoid complexity.
+	 */
+	cpu_reg(host_ctxt, 1) = pkvm_init_devices();
+}
+
 typedef void (*hcall_t)(struct kvm_cpu_context *);
 
 #define HANDLE_FUNC(x)	[__KVM_HOST_SMCCC_FUNC_##x] = (hcall_t)handle_##x
@@ -1789,6 +1798,7 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__pkvm_init_module),
 	HANDLE_FUNC(__pkvm_register_hcall),
 	HANDLE_FUNC(__pkvm_iommu_init),
+	HANDLE_FUNC(__pkvm_devices_init),
 	HANDLE_FUNC(__pkvm_prot_finalize),
 
 	HANDLE_FUNC(__pkvm_host_share_hyp),
