@@ -21,6 +21,9 @@
 
 #define KVM_HOST_S2_FLAGS (KVM_PGTABLE_S2_NOFWB | KVM_PGTABLE_S2_IDMAP)
 
+/* Replace this with something more structured once day */
+#define MMIO_NOTE	(('M' << 24 | 'M' << 16 | 'I' << 8 | 'O') << 1)
+
 struct host_mmu host_mmu;
 
 static struct hyp_pool host_s2_pool;
@@ -991,8 +994,14 @@ static int hyp_complete_donation(u64 addr,
 
 static enum pkvm_page_state guest_get_page_state(kvm_pte_t pte, u64 addr)
 {
-	if (!kvm_pte_valid(pte))
-		return PKVM_NOPAGE;
+	if (!kvm_pte_valid(pte)) {
+		enum pkvm_page_state state = PKVM_NOPAGE;
+
+		if (pte == MMIO_NOTE)
+			state |= PKVM_MMIO;
+
+		return state;
+	}
 
 	return pkvm_getstate(kvm_pgtable_stage2_pte_prot(pte));
 }
@@ -1976,9 +1985,6 @@ unlock:
 
 	return ret;
 }
-
-/* Replace this with something more structured once day */
-#define MMIO_NOTE	(('M' << 24 | 'M' << 16 | 'I' << 8 | 'O') << 1)
 
 static bool __check_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
 {
