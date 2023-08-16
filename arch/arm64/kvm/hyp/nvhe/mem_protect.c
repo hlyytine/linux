@@ -2002,46 +2002,53 @@ static bool __check_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
 		pte == MMIO_NOTE);
 }
 
-int __pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
+int __pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa,
+				size_t size, size_t *guarded)
 {
+	struct guest_request_walker_data data = GUEST_WALKER_DATA_INIT(PKVM_NOPAGE);
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(hyp_vcpu);
-	kvm_pte_t pte;
-	u32 level;
+	struct kvm_pgtable_walker walker = {
+		.cb     = guest_request_walker,
+		.flags  = KVM_PGTABLE_WALK_LEAF,
+		.arg    = (void *)&data,
+	};
 	int ret;
 
 	if (!test_bit(KVM_ARCH_FLAG_MMIO_GUARD, &vm->kvm.arch.flags))
 		return -EINVAL;
 
-	if (ipa & ~PAGE_MASK)
+	if (!PAGE_ALIGNED(ipa) || !PAGE_ALIGNED(size))
 		return -EINVAL;
 
 	guest_lock_component(vm);
 
-	ret = kvm_pgtable_get_leaf(&vm->pgt, ipa, &pte, &level);
-	if (ret)
+	/*
+	 * Check we either have NOMAP or NOMAP|MMIO in this range.
+	 */
+	data.desired_mask = ~PKVM_MMIO;
+	ret = kvm_pgtable_walk(&vm->pgt, ipa, size, &walker);
+	if (ret == -E2BIG)
+		ret = 0;
+	else if (ret)
 		goto unlock;
 
-	if (pte && BIT(ARM64_HW_PGTABLE_LEVEL_SHIFT(level)) == PAGE_SIZE) {
-		/*
-		 * Already flagged as MMIO, let's accept it, and fail
-		 * otherwise
-		 */
-		if (pte != MMIO_NOTE)
-			ret = -EBUSY;
+	/*
+	 * Intersection between the requested region and what has been verified
+	 */
+	size = min(data.size - (size_t)(ipa - data.ipa_start), size);
 
-		goto unlock;
-	}
-
-	ret = kvm_pgtable_stage2_annotate(&vm->pgt, ipa, PAGE_SIZE,
+	ret = kvm_pgtable_stage2_annotate(&vm->pgt, ipa, size,
 					  &hyp_vcpu->vcpu.arch.pkvm_memcache,
 					  MMIO_NOTE);
-
+	if (guarded)
+		*guarded = size;
 unlock:
 	guest_unlock_component(vm);
 	return ret;
 }
 
-int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
+int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa,
+			       size_t size, size_t *unguarded)
 {
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(hyp_vcpu);
 
@@ -2055,6 +2062,10 @@ int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
 				ALIGN_DOWN(ipa, PAGE_SIZE), PAGE_SIZE));
 
 	guest_unlock_component(vm);
+
+	if (unguarded)
+		*unguarded = PAGE_SIZE;
+
 	return 0;
 }
 

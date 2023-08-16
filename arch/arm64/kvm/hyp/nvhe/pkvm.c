@@ -1415,9 +1415,14 @@ static bool pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 *exit_
 {
 	u64 retval = SMCCC_RET_SUCCESS;
 	u64 ipa = smccc_get_arg1(&hyp_vcpu->vcpu);
+	size_t size = smccc_get_arg3(&hyp_vcpu->vcpu);
+	size_t guarded;
 	int ret;
 
-	ret = __pkvm_install_ioguard_page(hyp_vcpu, ipa);
+	if (!size)
+		size = PAGE_SIZE;
+
+	ret = __pkvm_install_ioguard_page(hyp_vcpu, ipa, size, &guarded);
 	if (ret == -ENOMEM) {
 		struct kvm_hyp_req *req;
 
@@ -1445,7 +1450,32 @@ out_guest_err:
 	if (ret)
 		retval = SMCCC_RET_INVALID_PARAMETER;
 
-	smccc_set_retval(&hyp_vcpu->vcpu, retval, 0, 0, 0);
+	smccc_set_retval(&hyp_vcpu->vcpu, retval, guarded, 0, 0);
+	return true;
+}
+
+static bool pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 *exit_code)
+{
+	u64 retval = SMCCC_RET_SUCCESS;
+	u64 ipa = smccc_get_arg1(&hyp_vcpu->vcpu);
+	size_t size = smccc_get_arg2(&hyp_vcpu->vcpu);
+	u64 arg3 = smccc_get_arg3(&hyp_vcpu->vcpu);
+	size_t unguarded = 0;
+	int ret = -EINVAL;
+
+	if (arg3)
+		goto out_guest_err;
+
+	if (!size)
+		size = PAGE_SIZE;
+
+	ret = __pkvm_remove_ioguard_page(hyp_vcpu, ipa, size, &unguarded);
+
+out_guest_err:
+	if (ret)
+		retval = SMCCC_RET_INVALID_PARAMETER;
+
+	smccc_set_retval(&hyp_vcpu->vcpu, retval, unguarded, 0, 0);
 	return true;
 }
 
@@ -1540,11 +1570,7 @@ bool kvm_handle_pvm_hvc64(struct kvm_vcpu *vcpu, u64 *exit_code)
 	case ARM_SMCCC_VENDOR_HYP_KVM_MMIO_GUARD_MAP_FUNC_ID:
 		return pkvm_install_ioguard_page(hyp_vcpu, exit_code);
 	case ARM_SMCCC_VENDOR_HYP_KVM_MMIO_GUARD_UNMAP_FUNC_ID:
-		if (__pkvm_remove_ioguard_page(hyp_vcpu, vcpu_get_reg(vcpu, 1)))
-			val[0] = SMCCC_RET_INVALID_PARAMETER;
-		else
-			val[0] = SMCCC_RET_SUCCESS;
-		break;
+		return pkvm_remove_ioguard_page(hyp_vcpu, exit_code);
 	case ARM_SMCCC_VENDOR_HYP_KVM_MMIO_GUARD_INFO_FUNC_ID:
 	case ARM_SMCCC_VENDOR_HYP_KVM_HYP_MEMINFO_FUNC_ID:
 		return pkvm_meminfo_call(hyp_vcpu);
