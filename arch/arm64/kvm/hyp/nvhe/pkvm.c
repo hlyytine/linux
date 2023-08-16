@@ -1419,16 +1419,29 @@ static bool pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 *exit_
 
 	ret = __pkvm_install_ioguard_page(hyp_vcpu, ipa);
 	if (ret == -ENOMEM) {
+		struct kvm_hyp_req *req;
+
 		/*
 		 * We ran out of memcache, let's ask for more. Cancel
 		 * the effects of the HVC that took us here, and
 		 * forward the hypercall to the host for page donation
 		 * purposes.
 		 */
+		req = pkvm_hyp_req_reserve(hyp_vcpu, KVM_HYP_REQ_MEM);
+		if (!req)
+			goto out_guest_err;
+
+		req->mem.dest = REQ_MEM_VCPU_MEMCACHE;
+		req->mem.nr_pages = kvm_mmu_cache_min_pages(hyp_vcpu->vcpu.kvm);
+
 		write_sysreg_el2(read_sysreg_el2(SYS_ELR) - 4, SYS_ELR);
+
+		*exit_code = ARM_EXCEPTION_HYP_REQ;
+
 		return false;
 	}
 
+out_guest_err:
 	if (ret)
 		retval = SMCCC_RET_INVALID_PARAMETER;
 
