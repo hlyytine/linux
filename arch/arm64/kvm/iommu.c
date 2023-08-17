@@ -23,6 +23,7 @@ int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops)
 	 */
 	return cmpxchg_release(&iommu_driver, NULL, kern_ops) ? -EBUSY : 0;
 }
+EXPORT_SYMBOL(kvm_iommu_register_driver);
 
 int kvm_iommu_init_hyp(struct kvm_iommu_ops *hyp_ops)
 {
@@ -31,6 +32,7 @@ int kvm_iommu_init_hyp(struct kvm_iommu_ops *hyp_ops)
 
 	return kvm_call_hyp_nvhe(__pkvm_iommu_init, hyp_ops);
 }
+EXPORT_SYMBOL(kvm_iommu_init_hyp);
 
 int kvm_iommu_init_driver(void)
 {
@@ -42,6 +44,7 @@ int kvm_iommu_init_driver(void)
 
 	return iommu_driver->init_driver();
 }
+EXPORT_SYMBOL(kvm_iommu_init_driver);
 
 void kvm_iommu_remove_driver(void)
 {
