@@ -6,6 +6,7 @@
 #include <nvhe/iommu.h>
 
 #include "../../../io-pgtable-arm.h"
+#include "arm-smmu-v3-module.h"
 
 #define io_pgtable_cfg_to_pgtable(x) container_of((x), struct io_pgtable, cfg)
 
