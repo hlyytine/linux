@@ -1,0 +1,6 @@
+subdir-ccflags-y += -I$(srctree)/arch/arm64/kvm/hyp/include/
+subdir-ccflags-y += -DMODULE
+ifeq ($(CONFIG_ARM_SMMU_V3_PKVM),m)
+hyp-obj-y := arm-smmu-v3.o ../arm-smmu-v3-common-lib.o io-pgtable-arm-hyp.o  ../../../io-pgtable-arm.o
+endif
+include $(srctree)/arch/arm64/kvm/hyp/nvhe/Makefile.module
