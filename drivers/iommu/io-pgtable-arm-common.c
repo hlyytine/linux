@@ -10,6 +10,7 @@
 #include <linux/types.h>
 
 #include "io-pgtable-arm.h"
+#include "arm/arm-smmu-v3/pkvm/arm-smmu-v3-module.h"
 
 /*
  * Check if concatenated PGDs are mandatory according to Arm DDI0487 (K.a)
