@@ -6,6 +6,7 @@
 
 #include <linux/io-pgtable.h>
 #include "../../../io-pgtable-arm.h"
+#include "arm-smmu-v3-module.h"
 
 struct io_pgtable_ops *kvm_alloc_io_pgtable_ops(enum io_pgtable_fmt fmt,
 						struct io_pgtable_cfg *cfg,
