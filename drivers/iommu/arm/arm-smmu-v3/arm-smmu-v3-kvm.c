@@ -36,6 +36,18 @@ struct kvm_arm_smmu_domain {
 #define smmu_to_host(_smmu) \
 	container_of(_smmu, struct host_arm_smmu_device, smmu);
 
+#ifdef MODULE
+static unsigned long                   pkvm_module_token;
+
+#define ksym_ref_addr_nvhe(x) \
+	((typeof(kvm_nvhe_sym(x)) *)(pkvm_el2_mod_va(&kvm_nvhe_sym(x), pkvm_module_token)))
+
+int kvm_nvhe_sym(smmu_init_hyp_module)(const struct pkvm_module_ops *ops);
+#else
+#define ksym_ref_addr_nvhe(x) \
+	((typeof(kvm_nvhe_sym(x)) *)(kern_hyp_va(lm_alias(&kvm_nvhe_sym(x)))))
+#endif
+
 static size_t				kvm_arm_smmu_cur;
 static size_t				kvm_arm_smmu_count;
 static struct hyp_arm_smmu_v3_device	*kvm_arm_smmu_array;
@@ -809,7 +821,18 @@ static int kvm_arm_smmu_v3_init_drv(void)
 	 */
 	kvm_hyp_arm_smmu_v3_smmus = kvm_arm_smmu_array;
 	kvm_hyp_arm_smmu_v3_count = kvm_arm_smmu_count;
-	ret = kvm_iommu_init_hyp(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))));
+
+#ifdef MODULE
+	ret = pkvm_load_el2_module(kvm_nvhe_sym(smmu_init_hyp_module),
+				   &pkvm_module_token);
+
+	if (ret) {
+		pr_err("Failed to load SMMUv3 IOMMU EL2 module: %d\n", ret);
+		return ret;
+	}
+#endif
+
+	ret = kvm_iommu_init_hyp(ksym_ref_addr_nvhe(smmu_ops));
 	if (ret)
 		return ret;
 	return kvm_arm_smmu_v3_post_init();
@@ -826,6 +849,7 @@ static void kvm_arm_smmu_v3_remove_drv(void)
 	platform_driver_unregister(&kvm_arm_smmu_driver);
 }
 
+#ifndef MODULE
 size_t smmu_hyp_pgt_pages(void)
 {
 	/*
@@ -836,6 +860,7 @@ size_t smmu_hyp_pgt_pages(void)
 		return host_s2_pgtable_pages() + 100;
 	return 0;
 }
+#endif
 
 struct kvm_iommu_driver kvm_smmu_v3_ops = {
 	.init_driver = kvm_arm_smmu_v3_init_drv,
@@ -863,5 +888,15 @@ static int kvm_arm_smmu_v3_register(void)
 	return ret;
 };
 
+/*
+ * Register must be run before de-privliage before kvm_iommu_init_driver
+ * for module case, it should be loaded using pKVM early loading which
+ * loads it before this point.
+ * For builtin drivers we use core_initcall
+ */
+#ifdef MODULE
+module_init(kvm_arm_smmu_v3_register);
+#else
 core_initcall(kvm_arm_smmu_v3_register);
+#endif
 MODULE_LICENSE("GPL v2");
