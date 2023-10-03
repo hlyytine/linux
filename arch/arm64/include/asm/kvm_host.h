@@ -1669,4 +1669,9 @@ static inline bool kvm_arch_has_irq_bypass(void)
 	return true;
 }
 
+/* Allocator interface IDs. */
+#define HYP_ALLOC_MGT_HEAP_ID          0
+
+unsigned long __pkvm_reclaim_hyp_alloc_mgt(unsigned long nr_pages);
+
 #endif /* __ARM64_KVM_HOST_H__ */
