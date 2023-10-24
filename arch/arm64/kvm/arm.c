@@ -270,7 +270,8 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 	kfree(kvm->arch.sysreg_masks);
 	kvm_destroy_vcpus(kvm);
 
-	kvm_unshare_hyp(kvm, kvm + 1);
+	if (is_protected_kvm_enabled() && pkvm_is_hyp_created(kvm))
+		kvm_unshare_hyp(kvm, kvm + 1);
 
 	kvm_arm_teardown_hypercalls(kvm);
 }
