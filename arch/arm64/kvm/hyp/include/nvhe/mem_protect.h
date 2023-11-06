@@ -30,7 +30,8 @@ enum pkvm_page_state {
 					  KVM_PGTABLE_PROT_SW1,
 
 	/* Meta-states which aren't encoded directly in the PTE's SW bits */
-	PKVM_NOPAGE,
+	PKVM_NOPAGE			= BIT(0),
+	PKVM_MMIO			= BIT(1),
 };
 
 #define PKVM_PAGE_STATE_PROT_MASK	(KVM_PGTABLE_PROT_SW0 | KVM_PGTABLE_PROT_SW1)
@@ -73,10 +74,14 @@ int __pkvm_host_share_ffa(u64 pfn, u64 nr_pages);
 int __pkvm_host_unshare_ffa(u64 pfn, u64 nr_pages);
 int __pkvm_host_share_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu);
 int __pkvm_host_donate_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu);
-int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa);
-int __pkvm_guest_unshare_host(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa);
-int __pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa);
-int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa);
+int __pkvm_guest_share_host(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa, u64 size,
+			    u64 *shared);
+int __pkvm_guest_unshare_host(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa, u64 size,
+			      u64 *unshared);
+int __pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa,
+				size_t size, size_t *guarded);
+int __pkvm_remove_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa,
+			       size_t size, size_t *unguarded);
 bool __pkvm_check_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu);
 int __pkvm_guest_relinquish_to_host(struct pkvm_hyp_vcpu *vcpu,
 				    u64 ipa, u64 *ppa);
@@ -96,8 +101,8 @@ int refill_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages,
 void destroy_hyp_vm_pgt(struct pkvm_hyp_vm *vm);
 void drain_hyp_pool(struct pkvm_hyp_vm *vm, struct kvm_hyp_memcache *mc);
 
-void psci_mem_protect_inc(u64 n);
-void psci_mem_protect_dec(u64 n);
+void psci_mem_protect_inc(size_t size);
+void psci_mem_protect_dec(size_t size);
 
 static __always_inline void __load_host_stage2(void)
 {
