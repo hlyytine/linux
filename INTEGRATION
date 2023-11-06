@@ -1,0 +1,55 @@
+Integration Notes
+
+Base: Linux 6.6 (ffc253263a13)
+
+Branches and Base:
+for-upstream/ffa-proxy	Linux 6.6
+for-upstream/pkvm-core	Linux 6.6
+for-upstream/debug-pmu-core	for-upstream/pkvm-core
+for-upstream/fix-sve	for-upstream/pkvm-core
+for-upstream/sve-guest	for-upstream/fix-sve
+for-upstream/pkvm-sme	for-upstream/pkvm-core
+for-upstream/trng-relay	for-upstream/pkvm-core
+for-upstream/pkvm-pvmfw-loader	for-upstream/pkvm-core
+for-upstream/pkvm-coalescing	for-upstream/pkvm-core
+for-upstream/mmioguard	for-upstream/pkvm-pvmfw-loader
+for-upstream/mmioguard-guest	Linux 6.6
+for-upstream/memory-reclaim	for-upstream/mmioguard
+for-upstream/memory-reclaim-guest	for-upstream/mmioguard-guest
+for-upstream/pkvm-psci-mem-protect	for-upstream/memory-reclaim
+for-upstream/fast-teardown	for-upstream/pkvm-psci-mem-protect
+for-upstream/pkvm-allocator	for-upstream/fast-teardown
+for-upstream/pkvm-tracing	for-upstream/pkvm-allocator
+for-upstream/pkvm-accounting	for-upstream/pkvm-allocator
+for-upstream/pkvm-guest-hvc-range       for-upstream/pkvm-allocator
+for-upstream/pkvm-guest-hvc-range-guest for-upstream/mmioguard-guest
+for-upstream/pkvm_host_stage2_ptdump    for-upstream/pkvm-core
+for-upstream/guest-ffa-proxy	for-upstream/pkvm-allocator
+
+To access, prefix with:
+https://android-kvm.googlesource.com/linux/+/refs/heads/
+
+Commands for merging the integration branches:
+# for-upstream/pkvm-tracing
+# for-upstream/pkvm-allocator
+# for-upstream/fast-teardown
+# for-upstream/pkvm-psci-mem-protect
+# for-upstream/memory-reclaim
+# for-upstream/mmioguard
+# for-upstream/pkvm-pvmfw-loader
+# for-upstream/pkvm-core
+git checkout -b for-upstream/pkvm-integration-6.6 origin/for-upstream/pkvm-tracing
+git merge origin/for-upstream/pkvm-accounting
+git merge origin/for-upstream/pkvm-guest-hvc-range
+# for-upstream/mmioguard-guest
+git merge origin/for-upstream/pkvm-guest-hvc-range-guest
+git merge origin/for-upstream/ffa-proxy
+git merge origin/for-upstream/debug-pmu-core
+# origin/for-upstream/fix-sve
+git merge origin/for-upstream/sve-guest
+git merge origin/for-upstream/pkvm-sme
+git merge origin/for-upstream/trng-relay
+git merge origin/for-upstream/pkvm-coalescing
+git merge origin/for-upstream/memory-reclaim-guest
+git merge origin/for-upstream/pkvm_host_stage2_ptdump
+git merge origin/for-upstream/guest-ffa-proxy
