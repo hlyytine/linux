@@ -70,6 +70,22 @@ static int divide_memory_pool(void *virt, unsigned long size)
 	return 0;
 }
 
+static int create_hyp_host_fp_mappings(void)
+{
+	void *start, *end;
+	int ret, i;
+
+	for (i = 0; i < hyp_nr_cpus; i++) {
+		start = (void *)kern_hyp_va(kvm_arm_hyp_host_fp_state[i]);
+		end = start + PAGE_ALIGN(pkvm_host_fp_state_size());
+		ret = pkvm_create_mappings(start, end, PAGE_HYP);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
 				 unsigned long *per_cpu_base,
 				 u32 hyp_va_bits)
@@ -127,6 +143,8 @@ static int recreate_hyp_mappings(phys_addr_t phys, unsigned long size,
 		if (ret)
 			return ret;
 	}
+
+	create_hyp_host_fp_mappings();
 
 	/*
 	 * Map the host sections RO in the hypervisor, but transfer the

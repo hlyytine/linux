@@ -13,6 +13,23 @@
 #include <asm/kvm_pgtable.h>
 #include <asm/sysreg.h>
 
+/*
+ * Stores the sve state for the host in protected mode.
+ */
+struct kvm_host_sve_state {
+	u64 zcr_el1;
+
+	/*
+	 * Ordering is important since __sve_save_state/__sve_restore_state
+	 * relies on it.
+	 */
+	u32 fpsr;
+	u32 fpcr;
+
+	/* Must be SVE_VQ_BYTES (128 bit) aligned. */
+	char sve_regs[];
+};
+
 /* Maximum number of VMs that can co-exist under pKVM. */
 #define KVM_MAX_PVMS 255
 
@@ -63,6 +80,7 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa);
  * - AArch64 guests only (no support for AArch32 guests):
  *	AArch32 adds complexity in trap handling, emulation, condition codes,
  *	etc...
+ * - SVE
  * - RAS (v1)
  *	Supported by KVM
  */
@@ -71,6 +89,7 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa);
 	FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_EL1_EL1), ID_AA64PFR0_EL1_ELx_64BIT_ONLY) | \
 	FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_EL1_EL2), ID_AA64PFR0_EL1_ELx_64BIT_ONLY) | \
 	FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_EL1_EL3), ID_AA64PFR0_EL1_ELx_64BIT_ONLY) | \
+	FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_EL1_SVE), ID_AA64PFR0_EL1_SVE_IMP) | \
 	FIELD_PREP(ARM64_FEATURE_MASK(ID_AA64PFR0_EL1_RAS), ID_AA64PFR0_EL1_RAS_IMP) \
 	)
 
@@ -149,11 +168,19 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa);
 	)
 
 /*
- * No support for Scalable Vectors for protected VMs:
- *	Requires additional support from KVM, e.g., context-switching and
- *	trapping at EL2
+ * No restrictions for Scalable Vectors (SVE).
  */
-#define PVM_ID_AA64ZFR0_ALLOW (0ULL)
+#define PVM_ID_AA64ZFR0_ALLOW (\
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_SVEver) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_AES) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_BitPerm) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_BF16) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_SHA3) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_SM4) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_I8MM) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_F32MM) | \
+	ARM64_FEATURE_MASK(ID_AA64ZFR0_EL1_F64MM) \
+	)
 
 /*
  * No support for debug, including breakpoints, and watchpoints for protected
@@ -367,6 +394,15 @@ static inline unsigned long hyp_ffa_proxy_pages(void)
 
 	/* Plus a page each for the hypervisor's RX and TX mailboxes. */
 	return (2 * KVM_FFA_MBOX_NR_PAGES) + DIV_ROUND_UP(desc_max, PAGE_SIZE);
+}
+
+static inline size_t pkvm_host_fp_state_size(void)
+{
+	if (system_supports_sve())
+		return size_add(sizeof(struct kvm_host_sve_state),
+		       SVE_SIG_REGS_SIZE(sve_vq_from_vl(kvm_host_sve_max_vl)));
+	else
+		return sizeof(struct user_fpsimd_state);
 }
 
 int __pkvm_topup_hyp_alloc(unsigned long nr_pages);
