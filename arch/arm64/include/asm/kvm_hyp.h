@@ -157,6 +157,7 @@ extern unsigned long kvm_nvhe_sym(__icache_flags);
 extern unsigned int kvm_nvhe_sym(kvm_arm_vmid_bits);
 extern unsigned int kvm_nvhe_sym(kvm_sve_max_vl);
 extern unsigned int kvm_nvhe_sym(kvm_host_sve_max_vl);
+extern bool kvm_nvhe_sym(smccc_trng_available);
 
 struct kvm_nvhe_clock_data {
 	u32 mult;
