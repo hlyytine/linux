@@ -16,6 +16,7 @@ extern hyp_spinlock_t pkvm_pgd_lock;
 int hyp_create_pcpu_fixmap(void);
 void *hyp_fixmap_map(phys_addr_t phys);
 void hyp_fixmap_unmap(void);
+void hyp_poison_page(phys_addr_t phys);
 
 int hyp_create_idmap(u32 hyp_va_bits);
 int hyp_map_vectors(void);
@@ -28,5 +29,9 @@ int __pkvm_create_private_mapping(phys_addr_t phys, size_t size,
 				  unsigned long *haddr);
 int pkvm_create_stack(phys_addr_t phys, unsigned long *haddr);
 int pkvm_alloc_private_va_range(size_t size, unsigned long *haddr);
+phys_addr_t __pkvm_private_range_pa(void *va);
+int __pkvm_create_mappings(unsigned long start, unsigned long size,
+			   unsigned long phys, enum kvm_pgtable_prot prot);
+int __pkvm_remove_mappings(unsigned long start, unsigned long size);
 
 #endif /* __KVM_HYP_MM_H */

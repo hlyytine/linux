@@ -32,8 +32,8 @@ struct hyp_fixmap_slot {
 };
 static DEFINE_PER_CPU(struct hyp_fixmap_slot, fixmap_slots);
 
-static int __pkvm_create_mappings(unsigned long start, unsigned long size,
-				  unsigned long phys, enum kvm_pgtable_prot prot)
+int __pkvm_create_mappings(unsigned long start, unsigned long size,
+			   unsigned long phys, enum kvm_pgtable_prot prot)
 {
 	int err;
 
@@ -42,6 +42,17 @@ static int __pkvm_create_mappings(unsigned long start, unsigned long size,
 	hyp_spin_unlock(&pkvm_pgd_lock);
 
 	return err;
+}
+
+int __pkvm_remove_mappings(unsigned long start, unsigned long size)
+{
+	u64 unmapped;
+
+	hyp_spin_lock(&pkvm_pgd_lock);
+	unmapped = kvm_pgtable_hyp_unmap(&pkvm_pgtable, start, size);
+	hyp_spin_unlock(&pkvm_pgd_lock);
+
+	return unmapped == size ? 0 : -EFAULT;
 }
 
 static int __pkvm_alloc_private_va_range(unsigned long start, size_t size)
@@ -240,7 +251,7 @@ void *hyp_fixmap_map(phys_addr_t phys)
 	WRITE_ONCE(*ptep, pte);
 	dsb(ishst);
 
-	return (void *)slot->addr;
+	return (void *)slot->addr + offset_in_page(phys);
 }
 
 static void fixmap_clear_slot(struct hyp_fixmap_slot *slot)
@@ -420,4 +431,16 @@ int refill_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages,
 	*host_mc = tmp;
 
 	return ret;
+}
+
+phys_addr_t __pkvm_private_range_pa(void *va)
+{
+	kvm_pte_t pte;
+	u32 level;
+
+	hyp_spin_lock(&pkvm_pgd_lock);
+	WARN_ON(kvm_pgtable_get_leaf(&pkvm_pgtable, (u64)va, &pte, &level));
+	hyp_spin_unlock(&pkvm_pgd_lock);
+
+	return kvm_pte_to_phys(pte) + offset_in_page(va);
 }
