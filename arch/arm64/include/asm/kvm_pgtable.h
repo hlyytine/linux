@@ -10,6 +10,7 @@
 #include <linux/bits.h>
 #include <linux/kvm_host.h>
 #include <linux/types.h>
+#include <asm/kvm_host.h>
 
 #define KVM_PGTABLE_MAX_LEVELS		4U
 
@@ -53,8 +54,10 @@ typedef u64 kvm_pte_t;
 
 #define KVM_PTE_LEAF_ATTR_LO_S1_ATTRIDX	GENMASK(4, 2)
 #define KVM_PTE_LEAF_ATTR_LO_S1_AP	GENMASK(7, 6)
-#define KVM_PTE_LEAF_ATTR_LO_S1_AP_RO	3
-#define KVM_PTE_LEAF_ATTR_LO_S1_AP_RW	1
+#define KVM_PTE_LEAF_ATTR_LO_S1_AP_RO		\
+	({ cpus_have_final_cap(ARM64_KVM_HVHE) ? 2 : 3; })
+#define KVM_PTE_LEAF_ATTR_LO_S1_AP_RW		\
+	({ cpus_have_final_cap(ARM64_KVM_HVHE) ? 0 : 1; })
 #define KVM_PTE_LEAF_ATTR_LO_S1_SH	GENMASK(9, 8)
 #define KVM_PTE_LEAF_ATTR_LO_S1_SH_IS	3
 #define KVM_PTE_LEAF_ATTR_LO_S1_AF	BIT(10)
@@ -75,6 +78,27 @@ typedef u64 kvm_pte_t;
 #define KVM_PTE_LEAF_ATTR_HI_S2_XN	BIT(54)
 
 #define KVM_PTE_LEAF_ATTR_HI_S1_GP	BIT(50)
+
+#define KVM_PTE_LEAF_ATTR_S2_PERMS	(KVM_PTE_LEAF_ATTR_LO_S2_S2AP_R | \
+					 KVM_PTE_LEAF_ATTR_LO_S2_S2AP_W | \
+					 KVM_PTE_LEAF_ATTR_HI_S2_XN)
+
+#define KVM_INVALID_PTE_OWNER_MASK	GENMASK(9, 2)
+#define KVM_MAX_OWNER_ID		FIELD_MAX(KVM_INVALID_PTE_OWNER_MASK)
+
+/*
+ * Used to indicate a pte for which a 'break-before-make' sequence is in
+ * progress.
+ */
+#define KVM_INVALID_PTE_LOCKED		BIT(10)
+
+/* This corresponds to page-table locking order */
+enum pkvm_component_id {
+	PKVM_ID_HOST,
+	PKVM_ID_HYP,
+	PKVM_ID_FFA,
+	PKVM_ID_GUEST,
+};
 
 static inline bool kvm_pte_valid(kvm_pte_t pte)
 {
@@ -429,6 +453,21 @@ struct kvm_pgtable {
 	struct kvm_s2_mmu			*mmu;
 	enum kvm_pgtable_stage2_flags		flags;
 	struct kvm_pgtable_pte_ops		*pte_ops;
+};
+
+/**
+ * struct kvm_pgtable_snapshot - Snapshot page-table wrapper.
+ * @pgtable:		The page-table configuration.
+ * @mc:			Memcache used for pagetable pages allocation.
+ * @pgd_hva:		Host virtual address of a physically contiguous buffer
+ *			used for storing the PGD.
+ * @pgd_len:		The size of the phyisically contiguous buffer in bytes.
+ */
+struct kvm_pgtable_snapshot {
+	struct kvm_pgtable			pgtable;
+	struct kvm_hyp_memcache			mc;
+	void					*pgd_hva;
+	size_t					pgd_len;
 };
 
 /**
@@ -846,4 +885,24 @@ enum kvm_pgtable_prot kvm_pgtable_hyp_pte_prot(kvm_pte_t pte);
  */
 void kvm_tlb_flush_vmid_range(struct kvm_s2_mmu *mmu,
 				phys_addr_t addr, size_t size);
+
+#ifdef CONFIG_NVHE_EL2_DEBUG
+/**
+ * kvm_pgtable_stage2_copy() - Snapshot the pagetable
+ *
+ * @to_pgt:	Destination pagetable
+ * @from_pgt:	Source pagetable. The caller must lock the pagetables first
+ * @mc:		The memcache where we allocate the destination pagetables from
+ */
+int kvm_pgtable_stage2_copy(struct kvm_pgtable *to_pgt,
+			    const struct kvm_pgtable *from_pgt,
+			    void *mc);
+#else
+static inline int kvm_pgtable_stage2_copy(struct kvm_pgtable *to_pgt,
+					  const struct kvm_pgtable *from_pgt,
+					  void *mc)
+{
+	return -EPERM;
+}
+#endif	/* CONFIG_NVHE_EL2_DEBUG */
 #endif	/* __ARM64_KVM_PGTABLE_H__ */
