@@ -1859,6 +1859,7 @@ int __pkvm_topup_hyp_alloc_mgt_gfp(unsigned long id, unsigned long nr_pages,
 struct kvm_iommu_driver {
 	int (*init_driver)(void);
 	void (*remove_driver)(void);
+	pkvm_handle_t (*get_iommu_id_by_of)(struct device_node *np);
 };
 
 struct kvm_iommu_ops;
@@ -1867,6 +1868,7 @@ int kvm_iommu_init_hyp(struct kvm_iommu_ops *hyp_ops);
 int kvm_iommu_init_driver(void);
 void kvm_iommu_remove_driver(void);
 size_t kvm_iommu_pages(void);
+pkvm_handle_t kvm_get_iommu_id_by_of(struct device_node *np);
 
 #ifndef __KVM_NVHE_HYPERVISOR__
 int pkvm_iommu_resume(int device_id);

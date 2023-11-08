@@ -60,7 +60,7 @@ EXPORT_SYMBOL(kvm_iommu_init_hyp);
 int kvm_iommu_init_driver(void)
 {
 	/* See kvm_iommu_register_driver() */
-	if (WARN_ON(!smp_load_acquire(&iommu_driver))) {
+	if (WARN_ON(!smp_load_acquire(&iommu_driver) || !iommu_driver->get_iommu_id_by_of)) {
 		kvm_err("pKVM enabled without an IOMMU driver, do not run confidential workload in virtual machines\n");
 		return -ENODEV;
 	}
@@ -94,6 +94,15 @@ size_t kvm_iommu_pages(void)
 out_set_pages:
 	kvm_nvhe_sym(hyp_kvm_iommu_pages) = nr_pages;
 	return nr_pages;
+}
+
+
+pkvm_handle_t kvm_get_iommu_id_by_of(struct device_node *np)
+{
+	if (!iommu_driver)
+		return 0;
+
+	return iommu_driver->get_iommu_id_by_of(np);
 }
 
 /* Hypercall abstractions exposed to kernel IOMMU drivers */

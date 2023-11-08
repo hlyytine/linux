@@ -786,9 +786,31 @@ size_t smmu_hyp_pgt_pages(void)
 }
 #endif
 
+static pkvm_handle_t kvm_arm_smmu_v3_id(struct device *dev)
+{
+	struct arm_smmu_device *smmu = dev_get_drvdata(dev);
+	struct host_arm_smmu_device *host_smmu = smmu_to_host(smmu);
+
+	return host_smmu->id;
+}
+
+static pkvm_handle_t kvm_arm_v3_id_by_of(struct device_node *np)
+{
+	struct device *dev;
+
+	dev = driver_find_device_by_of_node(&kvm_arm_smmu_driver.driver, np);
+	if (!dev)
+		return 0;
+
+	put_device(dev);
+
+	return kvm_arm_smmu_v3_id(dev);
+}
+
 struct kvm_iommu_driver kvm_smmu_v3_ops = {
 	.init_driver = kvm_arm_smmu_v3_init_drv,
 	.remove_driver = kvm_arm_smmu_v3_remove_drv,
+	.get_iommu_id_by_of = kvm_arm_v3_id_by_of,
 };
 
 static int kvm_arm_smmu_v3_register(void)
