@@ -27,6 +27,7 @@
 #include <asm/processor.h>
 
 #include <nvhe/mem_protect.h>
+#include <nvhe/modules.h>
 
 /* Non-VHE specific context */
 DEFINE_PER_CPU(struct kvm_host_data, kvm_host_data);
@@ -348,6 +349,8 @@ int __kvm_vcpu_run(struct kvm_vcpu *vcpu)
 		gic_write_pmr(GIC_PRIO_IRQOFF);
 
 	host_ctxt->__hyp_running_vcpu = NULL;
+
+	__pkvm_unmask_serror();
 
 	return exit_code;
 }
