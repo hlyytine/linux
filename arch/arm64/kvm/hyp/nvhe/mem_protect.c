@@ -1769,7 +1769,7 @@ void hyp_poison_page(phys_addr_t phys, size_t size)
 }
 
 static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep, u64 *physp,
-			       size_t size)
+			       size_t size, bool check_mmio)
 {
 	kvm_pte_t pte;
 	u64 phys;
@@ -1791,14 +1791,28 @@ static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep,
 		return -E2BIG;
 
 	phys = kvm_pte_to_phys(pte);
-	ret = check_range_allowed_memory(phys, phys + PAGE_SIZE);
-	if (WARN_ON(ret))
-		return ret;
+	if (check_mmio) {
+		ret = check_range_allowed_memory(phys, phys + PAGE_SIZE);
+		if (WARN_ON(ret))
+			return ret;
+	}
 
 	*ptep = pte;
 	*physp = phys;
 
 	return 0;
+}
+
+int __pkvm_guest_get_valid_phys_page(struct pkvm_hyp_vm *vm, u64 *phys, u64 ipa)
+{
+	kvm_pte_t pte;
+	int ret;
+
+	guest_lock_component(vm);
+	ret = get_valid_guest_pte(vm, ipa, &pte, phys, 0, false);
+	guest_unlock_component(vm);
+
+	return ret;
 }
 
 int __pkvm_host_reclaim_page_guest(u64 gfn, u64 nr_pages, struct pkvm_hyp_vm *vm)
@@ -1814,7 +1828,7 @@ int __pkvm_host_reclaim_page_guest(u64 gfn, u64 nr_pages, struct pkvm_hyp_vm *vm
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = get_valid_guest_pte(vm, ipa, &pte, &phys, size);
+	ret = get_valid_guest_pte(vm, ipa, &pte, &phys, size, true);
 	if (ret)
 		goto unlock;
 
