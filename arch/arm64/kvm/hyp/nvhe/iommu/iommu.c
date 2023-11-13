@@ -10,6 +10,7 @@
 #include <hyp/adjust_pc.h>
 
 #include <linux/iommu.h>
+#include <kvm/device.h>
 
 #include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
@@ -295,14 +296,27 @@ int kvm_iommu_attach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 	if (!kvm_iommu_ops || !kvm_iommu_ops->attach_dev)
 		return -ENODEV;
 
+	/*
+	 * At the moment the IOMMU in EL2 is not aware of guests and pvIOMMU
+	 * doesn't exist yet, so all attaches come from host, this should change soon.
+	 */
+	ret = pkvm_devices_get_context(iommu_id, endpoint_id);
+	if (ret)
+		return ret;
+
 	domain = handle_to_domain(domain_id);
-	if (!domain || domain_get(domain))
-		return -EINVAL;
+	if (!domain || domain_get(domain)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
 
 	ret = kvm_iommu_ops->attach_dev(iommu_id, domain,
 				        endpoint_id, pasid, pasid_bits, flags);
 	if (ret)
 		domain_put(domain);
+
+out_unlock:
+	pkvm_devices_put_context(iommu_id, endpoint_id);
 	return ret;
 }
 
@@ -315,13 +329,24 @@ int kvm_iommu_detach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 	if (!kvm_iommu_ops || !kvm_iommu_ops->detach_dev)
 		return -ENODEV;
 
-	domain = handle_to_domain(domain_id);
-	if (!domain || atomic_read(&domain->refs) <= 1)
-		return -EINVAL;
-	ret = kvm_iommu_ops->detach_dev(iommu_id, domain, endpoint_id, pasid);
+	/* See kvm_iommu_attach_dev(). */
+	ret = pkvm_devices_get_context(iommu_id, endpoint_id);
 	if (ret)
 		return ret;
+
+	domain = handle_to_domain(domain_id);
+	if (!domain || atomic_read(&domain->refs) <= 1) {
+		goto out_unlock;
+		return -EINVAL;
+	}
+	ret = kvm_iommu_ops->detach_dev(iommu_id, domain, endpoint_id, pasid);
+	if (ret)
+		goto out_unlock;
+
 	domain_put(domain);
+
+out_unlock:
+	pkvm_devices_put_context(iommu_id, endpoint_id);
 	return ret;
 }
 
