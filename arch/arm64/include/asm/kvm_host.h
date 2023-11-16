@@ -1860,6 +1860,9 @@ struct kvm_iommu_driver {
 	int (*init_driver)(void);
 	void (*remove_driver)(void);
 	pkvm_handle_t (*get_iommu_id_by_of)(struct device_node *np);
+	int (*get_device_iommu_num_ids)(struct device *dev);
+	int (*get_device_iommu_id)(struct device *dev, u32 id,
+				   pkvm_handle_t *out_iommu, u32 *out_sid);
 };
 
 struct kvm_iommu_ops;
@@ -1900,6 +1903,9 @@ int kvm_iommu_attach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 size_t smmu_hyp_pgt_pages(void);
 #endif
 
+int kvm_iommu_device_num_ids(struct device *dev);
+int kvm_iommu_device_id(struct device *dev, u32 idx,
+			pkvm_handle_t *out_iommu, u32 *out_sid);
 #define __KVM_HAVE_ARCH_ASSIGNED_DEVICE_GROUP
 
 #endif /* __ARM64_KVM_HOST_H__ */
