@@ -1377,6 +1377,16 @@ static bool smmu_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 	return false;
 }
 
+static int smmu_id_to_token(pkvm_handle_t smmu_id, u64 *out_token)
+{
+	if (smmu_id >= kvm_hyp_arm_smmu_v3_count)
+		return -EINVAL;
+
+	smmu_id = array_index_nospec(smmu_id, kvm_hyp_arm_smmu_v3_count);
+	*out_token = kvm_hyp_arm_smmu_v3_smmus[smmu_id].mmio_addr;
+	return 0;
+}
+
 static int smmu_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
 {
 	struct hyp_arm_smmu_v3_domain *smmu_domain;
@@ -1499,4 +1509,5 @@ struct kvm_iommu_ops smmu_ops = {
 	.unmap_pages			= smmu_unmap_pages,
 	.iova_to_phys			= smmu_iova_to_phys,
 	.dev_block_dma			= smmu_dev_block_dma,
+	.get_iommu_token_by_id		= smmu_id_to_token,
 };
