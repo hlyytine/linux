@@ -256,9 +256,14 @@ static inline void __activate_traps_common(struct kvm_vcpu *vcpu)
 
 	*host_data_ptr(host_debug_state.mdcr_el2) = read_sysreg(mdcr_el2);
 	write_sysreg(vcpu->arch.mdcr_el2, mdcr_el2);
+}
 
+static inline void __activate_traps_hcrx(struct kvm_vcpu *vcpu)
+{
 	if (cpus_have_final_cap(ARM64_HAS_HCX)) {
+		struct kvm_cpu_context *hctxt = host_data_ptr(host_ctxt);
 		u64 hcrx = vcpu->arch.hcrx_el2;
+
 		if (vcpu_has_nv(vcpu) && !is_hyp_ctxt(vcpu)) {
 			u64 clr = 0, set = 0;
 
