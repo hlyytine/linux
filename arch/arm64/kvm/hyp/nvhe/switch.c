@@ -100,6 +100,7 @@ static void __activate_traps(struct kvm_vcpu *vcpu)
 	___activate_traps(vcpu, vcpu->arch.hcr_el2);
 	__activate_traps_common(vcpu);
 	__activate_cptr_traps(vcpu);
+	__activate_traps_hcrx(vcpu);
 	__activate_traps_hfgxtr(vcpu);
 
 	write_sysreg(__this_cpu_read(kvm_hyp_vector), vbar_el2);
