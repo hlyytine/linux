@@ -185,6 +185,7 @@ static int pkvm_check_pvm_cpu_features(struct kvm_vcpu *vcpu)
 static int pkvm_vcpu_init_traps(struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	struct kvm_vcpu *vcpu = &hyp_vcpu->vcpu;
+	struct kvm *kvm = vcpu->kvm;
 	int ret;
 
 	vcpu->arch.mdcr_el2 = 0;
@@ -202,6 +203,18 @@ static int pkvm_vcpu_init_traps(struct pkvm_hyp_vcpu *hyp_vcpu)
 	pvm_init_traps_hcr(vcpu);
 	pvm_init_traps_hcrx(vcpu);
 	pvm_init_traps_mdcr(vcpu);
+
+	if (!test_bit(KVM_ARCH_FLAG_FGU_INITIALIZED, &kvm->arch.flags))
+		return 0;
+
+	compute_fgu(kvm, HFGRTR_GROUP);
+	compute_fgu(kvm, HFGITR_GROUP);
+	compute_fgu(kvm, HDFGRTR_GROUP);
+	compute_fgu(kvm, HAFGRTR_GROUP);
+	compute_fgu(kvm, HFGRTR2_GROUP);
+	compute_fgu(kvm, HFGITR2_GROUP);
+	compute_fgu(kvm, HDFGRTR2_GROUP);
+	set_bit(KVM_ARCH_FLAG_FGU_INITIALIZED, &kvm->arch.flags);
 
 	return 0;
 }
@@ -343,7 +356,7 @@ struct pkvm_hyp_vm *get_np_pkvm_hyp_vm(pkvm_handle_t handle)
 	return hyp_vm;
 }
 
-static void pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struct kvm *host_kvm)
+static int pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struct kvm *host_kvm)
 {
 	struct kvm *kvm = &hyp_vm->kvm;
 	unsigned long host_arch_flags = READ_ONCE(host_kvm->arch.flags);
@@ -355,6 +368,9 @@ static void pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struc
 	if (!kvm_vm_is_protected(kvm)) {
 		hyp_vm->kvm.arch.flags = host_arch_flags;
 
+		if (!test_bit(KVM_ARCH_FLAG_FGU_INITIALIZED, &host_arch_flags))
+			return -EINVAL;
+
 		bitmap_copy(kvm->arch.vcpu_features,
 			    host_kvm->arch.vcpu_features,
 			    KVM_VCPU_MAX_FEATURES);
@@ -363,7 +379,9 @@ static void pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struc
 			hyp_vm->kvm.arch.midr_el1 = host_kvm->arch.midr_el1;
 
 		memcpy(kvm->arch.id_regs, host_kvm->arch.id_regs, sizeof(kvm->arch.id_regs));
-		return;
+		memcpy(kvm->arch.fgu, host_kvm->arch.fgu, sizeof(kvm->arch.fgu));
+
+		return 0;
 	}
 
 	kvm->arch.vcpu_features[0] = pvm_supported_vcpu_features() &
@@ -377,6 +395,8 @@ static void pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struc
 
 	if (kvm_pvm_ext_allowed(KVM_CAP_ARM_MTE) && kvm_has_mte(host_kvm))
 		set_bit(KVM_ARCH_FLAG_MTE_ENABLED, &kvm->arch.flags);
+
+	return 0;
 }
 
 static int pkvm_vcpu_init_psci(struct pkvm_hyp_vcpu *hyp_vcpu, u32 mp_state)
@@ -468,10 +488,11 @@ static size_t pkvm_get_last_ran_size(void)
 	return array_size(hyp_nr_cpus, sizeof(int));
 }
 
-static void init_pkvm_hyp_vm(struct kvm *host_kvm, struct pkvm_hyp_vm *hyp_vm,
-			     int *last_ran, unsigned int nr_vcpus)
+static int init_pkvm_hyp_vm(struct kvm *host_kvm, struct pkvm_hyp_vm *hyp_vm,
+			    int *last_ran, unsigned int nr_vcpus)
 {
 	u64 pvmfw_load_addr = PVMFW_INVALID_LOAD_ADDR;
+	int ret;
 
 	hyp_vm->host_kvm = host_kvm;
 	hyp_vm->kvm.created_vcpus = nr_vcpus;
@@ -485,8 +506,14 @@ static void init_pkvm_hyp_vm(struct kvm *host_kvm, struct pkvm_hyp_vm *hyp_vm,
 	hyp_vm->kvm.arch.mmu.last_vcpu_ran = (int __percpu *)last_ran;
 	memset(last_ran, -1, pkvm_get_last_ran_size());
 	hyp_vm->kvm.arch.flags = 0;
-	pkvm_init_features_from_host(hyp_vm, host_kvm);
+
+	ret = pkvm_init_features_from_host(hyp_vm, host_kvm);
+	if (ret)
+		return ret;
+
 	hyp_spin_lock_init(&hyp_vm->vcpus_lock);
+
+	return 0;
 }
 
 static int pkvm_vcpu_init_sve(struct pkvm_hyp_vcpu *hyp_vcpu, struct kvm_vcpu *host_vcpu)
@@ -730,7 +757,9 @@ int __pkvm_init_vm(struct kvm *host_kvm, unsigned long pgd_hva)
 	if (!pgd)
 		goto err_free_last_ran;
 
-	init_pkvm_hyp_vm(host_kvm, hyp_vm, last_ran, nr_vcpus);
+	ret = init_pkvm_hyp_vm(host_kvm, hyp_vm, last_ran, nr_vcpus);
+	if (ret)
+		goto err_unmap_pgd;
 
 	hyp_write_lock(&vm_table_lock);
 	ret = insert_vm_table_entry(host_kvm, hyp_vm);
@@ -748,6 +777,7 @@ err_remove_vm_table_entry:
 	remove_vm_table_entry(hyp_vm->kvm.arch.pkvm.handle);
 err_unlock:
 	hyp_write_unlock(&vm_table_lock);
+err_unmap_pgd:
 	unmap_donated_memory(pgd, pgd_size);
 err_free_last_ran:
 	hyp_free(last_ran);
