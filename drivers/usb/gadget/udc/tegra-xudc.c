@@ -3548,9 +3548,21 @@ static int tegra_xudc_phy_get(struct tegra_xudc *xudc)
 			err = PTR_ERR(xudc->usb3_phy[i]);
 			dev_err_probe(xudc->dev, err,
 				      "failed to get usb3-%d PHY\n", usb3);
+		} else if (xudc->usb3_phy[i]) {
+			dev_dbg(xudc->dev, "usb3-%d PHY registered", usb3);
+			continue;
+		}
+
+		/* Try getting USB3 phy with new DT schema */
+		snprintf(phy_name, sizeof(phy_name), "usb3-%d", i);
+		xudc->usb3_phy[i] = devm_phy_optional_get(xudc->dev, phy_name);
+		if (IS_ERR(xudc->usb3_phy[i])) {
+			err = PTR_ERR(xudc->usb3_phy[i]);
+			dev_err_probe(xudc->dev, err,
+				      "failed to get usb3-%d PHY\n", i);
 			goto clean_up;
 		} else if (xudc->usb3_phy[i])
-			dev_dbg(xudc->dev, "usb3-%d PHY registered", usb3);
+			dev_dbg(xudc->dev, "usb3-%d PHY registered", i);
 	}
 
 	return err;
