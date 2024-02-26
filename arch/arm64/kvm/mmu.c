@@ -1587,7 +1587,6 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 			ret = kvm_mmu_topup_memory_cache(memcache, min_pages);
 		else
 			ret = topup_hyp_memcache(memcache, min_pages);
-
 		if (ret)
 			return ret;
 	}
