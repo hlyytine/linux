@@ -1470,7 +1470,7 @@ static bool kvm_vma_mte_allowed(struct vm_area_struct *vma)
 static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 		struct kvm_memory_slot *memslot, unsigned long hva)
 {
-	struct kvm_hyp_memcache *hyp_memcache = &vcpu->arch.pkvm_memcache;
+	struct kvm_hyp_memcache *hyp_memcache = &vcpu->arch.stage2_mc;
 	unsigned int flags = FOLL_HWPOISON | FOLL_LONGTERM | FOLL_WRITE;
 	struct mm_struct *mm = current->mm;
 	struct kvm *kvm = vcpu->kvm;
@@ -1572,7 +1572,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	if (!is_protected_kvm_enabled())
 		memcache = &vcpu->arch.mmu_page_cache;
 	else
-		memcache = &vcpu->arch.pkvm_memcache;
+		memcache = &vcpu->arch.stage2_mc;
 
 	/*
 	 * Permission faults just need to update the existing leaf entry,

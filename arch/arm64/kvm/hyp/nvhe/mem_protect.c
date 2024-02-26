@@ -1311,7 +1311,7 @@ int __pkvm_host_donate_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu)
 
 	WARN_ON(kvm_pgtable_stage2_map(&vm->pgt, ipa, PAGE_SIZE, phys,
 				       pkvm_mkstate(KVM_PGTABLE_PROT_RWX, PKVM_PAGE_OWNED),
-				       &vcpu->vcpu.arch.pkvm_memcache, 0));
+				       &vcpu->vcpu.arch.stage2_mc, 0));
 unlock:
 	guest_unlock_component(vm);
 	host_unlock_component();
@@ -1423,7 +1423,7 @@ int __pkvm_guest_share_host(u64 gfn, struct pkvm_hyp_vcpu *vcpu)
 	psci_mem_protect_dec(1);
 	WARN_ON(kvm_pgtable_stage2_map(&vm->pgt, ipa, PAGE_SIZE, phys,
 				       pkvm_mkstate(KVM_PGTABLE_PROT_RWX, PKVM_PAGE_SHARED_OWNED),
-				       &vcpu->vcpu.arch.pkvm_memcache, 0));
+				       &vcpu->vcpu.arch.stage2_mc, 0));
 
 unlock:
 	guest_unlock_component(vm);
@@ -1456,7 +1456,7 @@ int __pkvm_guest_unshare_host(u64 gfn, struct pkvm_hyp_vcpu *vcpu)
 	psci_mem_protect_inc(1);
 	WARN_ON(kvm_pgtable_stage2_map(&vm->pgt, ipa, PAGE_SIZE, phys,
 				       pkvm_mkstate(KVM_PGTABLE_PROT_RWX, PKVM_PAGE_OWNED),
-				       &vcpu->vcpu.arch.pkvm_memcache, 0));
+				       &vcpu->vcpu.arch.stage2_mc, 0));
 
 unlock:
 	guest_unlock_component(vm);
@@ -1506,7 +1506,7 @@ int __pkvm_host_share_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu,
 
 	WARN_ON(kvm_pgtable_stage2_map(&vm->pgt, ipa, PAGE_SIZE, phys,
 				       pkvm_mkstate(prot, PKVM_PAGE_SHARED_BORROWED),
-				       &vcpu->vcpu.arch.pkvm_memcache, 0));
+				       &vcpu->vcpu.arch.stage2_mc, 0));
 	page->host_share_guest_count++;
 
 unlock:
@@ -1707,7 +1707,7 @@ int __pkvm_install_ioguard_page(struct pkvm_hyp_vcpu *hyp_vcpu, u64 ipa)
 	}
 
 	ret = kvm_pgtable_stage2_annotate(&vm->pgt, ipa, PAGE_SIZE,
-					  &hyp_vcpu->vcpu.arch.pkvm_memcache,
+					  &hyp_vcpu->vcpu.arch.stage2_mc,
 					  KVM_INVALID_PTE_MMIO_NOTE);
 
 unlock:
