@@ -1517,19 +1517,27 @@ void hyp_poison_page(phys_addr_t phys)
 	hyp_fixmap_unmap();
 }
 
-static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep, u64 *physp)
+static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep, u64 *physp,
+			       u8 order)
 {
+	size_t size = PAGE_SIZE << order;
 	kvm_pte_t pte;
 	u64 phys;
 	s8 level;
 	int ret;
+
+	if (order && size != PMD_SIZE)
+		return -EINVAL;
+
+	if (ipa != ALIGN_DOWN(ipa, size))
+		return -EINVAL;
 
 	ret = kvm_pgtable_get_leaf(&vm->pgt, ipa, &pte, &level);
 	if (ret)
 		return ret;
 	if (!kvm_pte_valid(pte))
 		return -ENOENT;
-	if (level != KVM_PGTABLE_LAST_LEVEL)
+	if (kvm_granule_size(level) != size)
 		return -E2BIG;
 
 	phys = kvm_pte_to_phys(pte);
@@ -1543,9 +1551,10 @@ static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep,
 	return 0;
 }
 
-int __pkvm_host_reclaim_page_guest(u64 gfn, struct pkvm_hyp_vm *vm)
+int __pkvm_host_reclaim_page_guest(u64 gfn, struct pkvm_hyp_vm *vm, u8 order)
 {
 	u64 ipa = hyp_pfn_to_phys(gfn);
+	size_t page_size = PAGE_SIZE << order;
 	kvm_pte_t pte;
 	u64 phys;
 	int ret;
@@ -1553,26 +1562,26 @@ int __pkvm_host_reclaim_page_guest(u64 gfn, struct pkvm_hyp_vm *vm)
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = get_valid_guest_pte(vm, ipa, &pte, &phys);
+	ret = get_valid_guest_pte(vm, ipa, &pte, &phys, order);
 	if (ret)
 		goto unlock;
 
 	switch(guest_get_page_state(pte, ipa)) {
 	case PKVM_PAGE_OWNED:
-		WARN_ON(__host_check_page_state_range(phys, PAGE_SIZE, PKVM_NOPAGE));
+		WARN_ON(__host_check_page_state_range(phys, page_size, PKVM_NOPAGE));
 		hyp_poison_page(phys);
-		psci_mem_protect_dec(1);
+		psci_mem_protect_dec(1 << order);
 		break;
 	case PKVM_PAGE_SHARED_OWNED:
-		WARN_ON(__host_check_page_state_range(phys, PAGE_SIZE, PKVM_PAGE_SHARED_BORROWED));
+		WARN_ON(__host_check_page_state_range(phys, page_size, PKVM_PAGE_SHARED_BORROWED));
 		break;
 	default:
 		ret = -EPERM;
 		goto unlock;
 	}
 
-	WARN_ON(kvm_pgtable_stage2_unmap(&vm->pgt, ipa, PAGE_SIZE));
-	WARN_ON(host_stage2_set_owner_locked(phys, PAGE_SIZE, PKVM_ID_HOST));
+	WARN_ON(kvm_pgtable_stage2_unmap(&vm->pgt, ipa, page_size));
+	WARN_ON(host_stage2_set_owner_locked(phys, page_size, PKVM_ID_HOST));
 
 unlock:
 	guest_unlock_component(vm);
@@ -1711,7 +1720,7 @@ unlock:
 	return ret;
 }
 
-static int __check_host_shared_guest(struct pkvm_hyp_vm *vm, u64 *__phys, u64 ipa)
+static int __check_host_shared_guest(struct pkvm_hyp_vm *vm, u64 *__phys, u64 ipa, u8 order)
 {
 	enum pkvm_page_state state;
 	struct hyp_page *page;
@@ -1719,7 +1728,7 @@ static int __check_host_shared_guest(struct pkvm_hyp_vm *vm, u64 *__phys, u64 ip
 	u64 phys;
 	int ret;
 
-	ret = get_valid_guest_pte(vm, ipa, &pte, &phys);
+	ret = get_valid_guest_pte(vm, ipa, &pte, &phys, order);
 	if (ret)
 		return ret;
 
@@ -1748,7 +1757,7 @@ int __pkvm_host_unshare_guest(u64 gfn, struct pkvm_hyp_vm *vm)
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = __check_host_shared_guest(vm, &phys, ipa);
+	ret = __check_host_shared_guest(vm, &phys, ipa, 0);
 	if (ret)
 		goto unlock;
 
@@ -1779,7 +1788,7 @@ static void assert_host_shared_guest(struct pkvm_hyp_vm *vm, u64 ipa)
 	host_lock_component();
 	guest_lock_component(vm);
 
-	ret = __check_host_shared_guest(vm, &phys, ipa);
+	ret = __check_host_shared_guest(vm, &phys, ipa, 0);
 
 	guest_unlock_component(vm);
 	host_unlock_component();
