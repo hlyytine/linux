@@ -576,6 +576,40 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa)
 	kfree(ppage);
 }
 
+/*
+ * When a guest shares back a huge-mapping with the host. The block can be split without updating
+ * the kvm_pinned_page tree. This function intends to handle this case.
+ */
+static int __reclaim_dying_page(struct kvm_pinned_page *ppage, pkvm_handle_t handle)
+{
+	u64 gfn = ppage->ipa >> PAGE_SHIFT;
+	u8 order = ppage->order;
+	size_t size = PAGE_SIZE << order;
+
+	while (size) {
+		int err = kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle,
+					    gfn, 1 << order);
+
+		switch (err) {
+		case -E2BIG:
+			if (order)
+				order = 0;
+			else
+				/* Something is really wrong ... */
+				return -EINVAL;
+			break;
+		case 0:
+			size -= PAGE_SIZE << order;
+			gfn++;
+			break;
+		default:
+			return err;
+		}
+	}
+
+	return 0;
+}
+
 static int __pkvm_pgtable_stage2_unmap(struct kvm_pgtable *pgt, u64 start, u64 end)
 {
 	struct kvm *kvm = kvm_s2_mmu_to_kvm(pgt->mmu);
@@ -605,10 +639,9 @@ static int __pkvm_pgtable_stage2_unmap(struct kvm_pgtable *pgt, u64 start, u64 e
 	ppage = kvm_pinned_pages_iter_first(&kvm->arch.pkvm.pinned_pages, 0, ~(0UL));
 	while (ppage) {
 		struct kvm_pinned_page *next = kvm_pinned_pages_iter_next(ppage, 0, ~(0UL));
-		u64 gfn = ppage->ipa >> PAGE_SHIFT;
 
 		WARN_ON(!kvm_vm_is_protected(kvm));
-		WARN_ON(kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle, gfn));
+		WARN_ON(__reclaim_dying_page(ppage, handle));
 		cond_resched();
 		unpin_user_pages_dirty_lock(&ppage->page, 1, true);
 		account_locked_vm(mm, 1 << ppage->order, false);

@@ -273,5 +273,4 @@ struct pkvm_ptdump_log_hdr {
 	/* The write index in the log page */
 	u64	w_index: 16;
 };
-
 #endif	/* __ARM64_KVM_PKVM_H__ */
