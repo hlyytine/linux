@@ -688,6 +688,13 @@ int pkvm_pgtable_stage2_init(struct kvm_pgtable *pgt, struct kvm_s2_mmu *mmu,
 	return 0;
 }
 
+static int __reclaim_dying_guest_page_call(u64 pfn, u64 gfn, u8 order, void *args)
+{
+	pkvm_handle_t handle = ((struct kvm *)args)->arch.pkvm.handle;
+
+	return kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle, gfn, order);
+}
+
 void pkvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 {
 	struct kvm *kvm = kvm_s2_mmu_to_kvm(pgt->mmu);
@@ -717,7 +724,7 @@ void pkvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 	while (ppage) {
 		WARN_ON(!kvm_vm_is_protected(kvm));
 		gfn = ppage->ipa >> PAGE_SHIFT;
-		WARN_ON(kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle, gfn));
+		WARN_ON(pkvm_call_hyp_nvhe_ppage(ppage, __reclaim_dying_guest_page_call, kvm, 1));
 		cond_resched();
 		unpin_user_pages_dirty_lock(&ppage->page, 1, true);
 		next = kvm_pinned_pages_iter_next(ppage, 0, ~(0UL));
