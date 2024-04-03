@@ -1678,7 +1678,7 @@ __pkvm_pages_to_ppages(struct kvm *kvm, struct kvm_memory_slot *memslot, gfn_t g
 
 		ppage->page = pfn_to_page(pfn);
 		ppage->ipa = ipa;
-		ppage->order = 0;
+		ppage->order = get_order(page_size);
 		ppage->pins = 1 << ppage->order;
 		list_add_tail(&ppage->list_node, ppages);
 		nr_ppages += ppage->pins;
@@ -1756,7 +1756,8 @@ static int __pkvm_host_donate_guest(struct kvm_vcpu *vcpu, struct list_head *ppa
 		u64 pfn = page_to_pfn(ppage->page);
 		gfn_t gfn = ppage->ipa >> PAGE_SHIFT;
 
-		ret = kvm_call_hyp_nvhe(__pkvm_host_map_guest, pfn, gfn, 1, KVM_PGTABLE_PROT_RWX);
+		ret = kvm_call_hyp_nvhe(__pkvm_host_map_guest, pfn, gfn, 1 << ppage->order,
+					KVM_PGTABLE_PROT_RWX);
 		/*
 		 * Getting -EPERM at this point implies that the pfn has already been
 		 * mapped. This should only ever happen when two vCPUs faulted on the
