@@ -438,8 +438,16 @@ void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa)
 	write_lock(&host_kvm->mmu_lock);
 	ppage = kvm_pinned_pages_iter_first(&host_kvm->arch.pkvm.pinned_pages,
 					   ipa, ipa + PAGE_SIZE - 1);
-	if (ppage)
-		kvm_pinned_pages_remove(ppage, &host_kvm->arch.pkvm.pinned_pages);
+	if (ppage) {
+		if (ppage->pins)
+			ppage->pins--;
+		else
+			WARN_ON(1);
+
+		if (!ppage->pins)
+			kvm_pinned_pages_remove(ppage,
+						&host_kvm->arch.pkvm.pinned_pages);
+	}
 	write_unlock(&host_kvm->mmu_lock);
 
 	WARN_ON(!ppage);
@@ -624,7 +632,7 @@ void pkvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 	struct mm_struct *mm = current->mm;
 	struct pkvm_mapping *mapping;
 	struct rb_node *node;
-	u64 gfn;
+	u64 gfn, pages = 0;
 
 	if (!handle)
 		return;
@@ -648,12 +656,14 @@ void pkvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 		WARN_ON(kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle, gfn));
 		cond_resched();
 		unpin_user_pages_dirty_lock(&ppage->page, 1, true);
-		account_locked_vm(mm, 1, false);
 		next = kvm_pinned_pages_iter_next(ppage, 0, ~(0UL));
 		kvm_pinned_pages_remove(ppage, &kvm->arch.pkvm.pinned_pages);
+		pages += ppage->pins;
 		kfree(ppage);
 		ppage = next;
 	}
+
+	account_locked_vm(mm, pages, false);
 
 	/* The finalization of the VM teardown is done from kvm_arch_destroy_vm() */
 }
