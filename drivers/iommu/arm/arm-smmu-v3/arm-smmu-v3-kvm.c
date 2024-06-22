@@ -380,6 +380,9 @@ static int kvm_arm_smmu_attach_dev_pasid(struct iommu_domain *domain,
 	if (old)
 		kvm_arm_smmu_detach_dev_pasid(dev, old, pasid);
 
+	if (domain->type == IOMMU_DOMAIN_BLOCKED)
+		return 0;
+
 	mutex_lock(&kvm_smmu_domain->init_mutex);
 	ret = kvm_arm_smmu_domain_finalize(kvm_smmu_domain, master);
 	mutex_unlock(&kvm_smmu_domain->init_mutex);
@@ -467,6 +470,24 @@ static bool kvm_arm_smmu_capable(struct device *dev, enum iommu_cap cap)
 	}
 }
 
+
+static int kvm_arm_smmu_attach_dev_blocked(struct iommu_domain *domain,
+					struct device *dev)
+{
+	struct iommu_domain *old = iommu_get_domain_for_dev(dev);
+
+	return kvm_arm_smmu_attach_dev_pasid(domain, dev, 0, old);
+}
+
+static const struct iommu_domain_ops kvm_arm_smmu_blocked_ops = {
+	.attach_dev = kvm_arm_smmu_attach_dev_blocked,
+};
+
+static struct iommu_domain kvm_arm_smmu_blocked_domain = {
+	.type = IOMMU_DOMAIN_BLOCKED,
+	.ops = &kvm_arm_smmu_blocked_ops,
+};
+
 static struct iommu_ops kvm_arm_smmu_ops = {
 	.capable		= kvm_arm_smmu_capable,
 	.device_group		= arm_smmu_device_group,
@@ -479,6 +500,7 @@ static struct iommu_ops kvm_arm_smmu_ops = {
 	.domain_alloc_paging		= kvm_arm_smmu_domain_alloc_paging,
 	.domain_alloc_identity		= kvm_arm_smmu_domain_alloc_identity,
 	.def_domain_type	= kvm_arm_smmu_def_domain_type,
+	.blocked_domain		= &kvm_arm_smmu_blocked_domain,
 	.default_domain_ops 	=  &(const struct iommu_domain_ops) {
 		.attach_dev	= kvm_arm_smmu_attach_dev,
 		.iova_to_phys	= kvm_arm_smmu_iova_to_phys,

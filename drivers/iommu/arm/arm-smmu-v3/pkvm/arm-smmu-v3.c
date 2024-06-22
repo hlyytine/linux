@@ -1423,6 +1423,34 @@ static void smmu_free_domain(struct kvm_hyp_iommu_domain *domain)
 	hyp_free(smmu_domain);
 }
 
+static int smmu_dev_block_dma(pkvm_handle_t iommu, u32 sid, bool is_host2guest)
+{
+	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
+	static struct arm_smmu_ste *dst;
+	int ret = 0;
+
+	if (!smmu)
+		return -ENODEV;
+
+	hyp_spin_lock(&smmu->lock);
+	dst = smmu_get_ste_ptr(smmu, sid);
+
+	/*
+	 * VFIO will attach the device to a blocking domain, this will make the
+	 * kernel driver detach the device which should be have zeroed STE.
+	 * So, if this is not the current state of the device, something
+	 * went wrong.
+	 * For guests, we need to do more as guests might not exit cleanly
+	 * and the device might be translating, so we have to actually block
+	 * the device and clean the STE/CD.
+	 */
+	if (dst->data[0])
+		ret = -EINVAL;
+
+	hyp_spin_unlock(&smmu->lock);
+	return ret;
+}
+
 #ifdef MODULE
 int smmu_init_hyp_module(const struct pkvm_module_ops *ops)
 {
@@ -1447,4 +1475,5 @@ struct kvm_iommu_ops smmu_ops = {
 	.map_pages			= smmu_map_pages,
 	.unmap_pages			= smmu_unmap_pages,
 	.iova_to_phys			= smmu_iova_to_phys,
+	.dev_block_dma			= smmu_dev_block_dma,
 };
