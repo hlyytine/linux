@@ -470,3 +470,11 @@ void kvm_iommu_host_stage2_idmap_complete(bool map)
 	trace_iommu_idmap_complete(map);
 	kvm_iommu_ops->host_stage2_idmap_complete(map);
 }
+
+int kvm_iommu_dev_block_dma(pkvm_handle_t iommu_id, u32 endpoint_id, bool host_to_guest)
+{
+	if (!kvm_iommu_ops || !kvm_iommu_ops->dev_block_dma)
+		return -ENODEV;
+
+	return kvm_iommu_ops->dev_block_dma(iommu_id, endpoint_id, host_to_guest);
+}

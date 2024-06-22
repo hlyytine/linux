@@ -8,12 +8,15 @@
 #include <linux/iommu.h>
 
 #include <nvhe/alloc_mgt.h>
+#include <nvhe/pkvm.h>
 
 struct kvm_hyp_iommu_domain {
 	atomic_t		refs;
 	pkvm_handle_t		domain_id;
 	void			*priv;
 };
+
+int kvm_iommu_dev_block_dma(pkvm_handle_t iommu_id, u32 endpoint_id, bool host_to_guest);
 
 struct kvm_iommu_ops {
 	int (*init)(void);
@@ -35,6 +38,8 @@ struct kvm_iommu_ops {
 	void (*iotlb_sync)(struct kvm_hyp_iommu_domain *domain,
 			   struct iommu_iotlb_gather *gather);
 	void (*host_stage2_idmap_complete)(bool map);
+	int (*dev_block_dma)(pkvm_handle_t iommu, u32 endpoint_id,
+			     bool is_host_to_guest);
 };
 
 int kvm_iommu_init(void *pool_base, size_t nr_pages, struct kvm_iommu_ops *ops);
