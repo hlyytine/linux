@@ -1591,6 +1591,11 @@ static long __pkvm_align_memslot(struct kvm *kvm, struct kvm_memory_slot *memslo
 	return gfn_end - gfn;
 }
 
+static int pkvm_mem_abort_device(struct kvm *kvm, u64 pfn, u64 gfn)
+{
+	return kvm_call_hyp_nvhe(__pkvm_host_map_guest_mmio, pfn, gfn);
+}
+
 static int __pkvm_pin_user_pages(struct kvm *kvm, struct kvm_memory_slot *memslot,
 				 u64 gfn, u64 nr_pages, struct page ***__pages)
 {
@@ -1902,10 +1907,40 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa, size_t s
 		return nr_pages;
 
 	ret = __pkvm_pin_user_pages(kvm, memslot, gfn, nr_pages, &pages);
-	if (ret == -EHWPOISON)
+	if (ret == -EHWPOISON) {
 		return 0;
-	else if (ret)
+	} else if (ret == -EREMOTEIO) {
+		/*
+		 * pKVM relies on pinning the page then getting the pfn from there to map it,
+		 * However, to avoid adding overhead on the hot path with checking pfn first,
+		 * device check is done on the fail path for pin_user_pages, inside -EFAULT
+		 * case, that possible is because the VMA for the device mapping is VM_IO,
+		 * which fails in check_vma_flags() with -EFAULT
+		 */
+		bool device, writable;
+		kvm_pfn_t pfn;
+		struct page *tmp;
+
+		pfn = __kvm_faultin_pfn(memslot, gfn,
+					kvm_is_write_fault(vcpu) ? FOLL_WRITE : 0,
+					&writable, &tmp);
+		if (is_error_noslot_pfn(pfn))
+			return ret;
+		device = kvm_is_device_pfn(pfn);
+		if (device) {
+			ret = pkvm_mem_abort_device(kvm, pfn, gfn);
+			if (ret == -EEXIST)
+				ret = 0; /* We might have raced with another vCPU. */
+			/* TBD set size when args is added. */
+		} else {
+			/* Release pin from __kvm_faultin_pfn(). */
+			kvm_release_faultin_page(kvm, tmp, true, writable);
+		}
+
 		return ret;
+	} else if (ret) {
+		return ret;
+	}
 
 	ret = __pkvm_pages_to_ppages(kvm, memslot, gfn, &nr_pages, pages, &ppages);
 	if (ret) {
