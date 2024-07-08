@@ -1393,6 +1393,9 @@ static int smmu_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
 	    (type != KVM_ARM_SMMU_DOMAIN_BYPASS && is_idmap_domain(domain)))
 		return -EINVAL;
 
+	if (type == KVM_ARM_SMMU_DOMAIN_ANY)
+		type = KVM_ARM_SMMU_DOMAIN_S1;
+
 	smmu_domain = hyp_alloc(sizeof(*smmu_domain));
 	if (!smmu_domain)
 		return -ENOMEM;
