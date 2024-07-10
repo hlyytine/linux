@@ -9,6 +9,11 @@
 #include <linux/pci.h>
 #include <linux/platform_device.h>
 
+struct pviommu_domain {
+	struct iommu_domain		domain;
+	unsigned long			id; /* pKVM domain ID. */
+};
+
 struct pviommu {
 	struct iommu_device		iommu;
 	u32				id;
@@ -19,6 +24,22 @@ struct pviommu_master {
 	struct pviommu			*iommu;
 	u32				ssid_bits;
 };
+
+static int smccc_to_linux_ret(u64 smccc_ret)
+{
+	switch (smccc_ret) {
+	case SMCCC_RET_SUCCESS:
+		return 0;
+	case SMCCC_RET_NOT_SUPPORTED:
+		return -EOPNOTSUPP;
+	case SMCCC_RET_NOT_REQUIRED:
+		return -ENOENT;
+	case SMCCC_RET_INVALID_PARAMETER:
+		return -EINVAL;
+	};
+
+	return -ENODEV;
+}
 
 static int pviommu_map_pages(struct iommu_domain *domain, unsigned long iova,
 			     phys_addr_t paddr, size_t pgsize, size_t pgcount,
@@ -41,6 +62,14 @@ static phys_addr_t pviommu_iova_to_phys(struct iommu_domain *domain, dma_addr_t 
 
 static void pviommu_domain_free(struct iommu_domain *domain)
 {
+	struct pviommu_domain *pv_domain = container_of(domain, struct pviommu_domain, domain);
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_hvc(ARM_SMCCC_VENDOR_HYP_KVM_PVIOMMU_OP_FUNC_ID,
+			  KVM_PVIOMMU_OP_FREE_DOMAIN, pv_domain->id, 0, 0, 0, 0, &res);
+	if (res.a0 != SMCCC_RET_SUCCESS)
+		pr_err("Failed to free domain %ld\n", res.a0);
+	kfree(pv_domain);
 }
 
 static int pviommu_attach_dev(struct iommu_domain *domain, struct device *dev)
@@ -48,9 +77,25 @@ static int pviommu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	return -ENODEV;
 }
 
-static struct iommu_domain *pviommu_domain_alloc(unsigned int type)
+static struct iommu_domain *pviommu_domain_alloc_paging(struct device *dev)
 {
-	return ERR_PTR(-ENODEV);
+	struct pviommu_domain *pv_domain;
+	struct arm_smccc_res res;
+
+	pv_domain = kzalloc(sizeof(*pv_domain), GFP_KERNEL);
+	if (!pv_domain)
+		return ERR_PTR(-ENOMEM);
+
+	arm_smccc_1_1_hvc(ARM_SMCCC_VENDOR_HYP_KVM_PVIOMMU_OP_FUNC_ID,
+			  KVM_PVIOMMU_OP_ALLOC_DOMAIN, 0, 0, 0, 0, 0, &res);
+	if (res.a0 != SMCCC_RET_SUCCESS) {
+		kfree(pv_domain);
+		return ERR_PTR(smccc_to_linux_ret(res.a0));
+	}
+
+	pv_domain->id = res.a1;
+
+	return &pv_domain->domain;
 }
 
 static struct platform_driver pkvm_pviommu_driver;
@@ -112,7 +157,7 @@ static struct iommu_ops pviommu_ops = {
 	.of_xlate		= pviommu_of_xlate,
 	.probe_device		= pviommu_probe_device,
 	.release_device		= pviommu_release_device,
-	.domain_alloc		= pviommu_domain_alloc,
+	.domain_alloc_paging		= pviommu_domain_alloc_paging,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= pviommu_attach_dev,
