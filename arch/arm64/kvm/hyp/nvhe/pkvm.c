@@ -583,8 +583,10 @@ static int init_pkvm_hyp_vcpu(struct pkvm_hyp_vcpu *hyp_vcpu,
 	hyp_vcpu->vcpu.arch.cflags = READ_ONCE(host_vcpu->arch.cflags);
 	hyp_vcpu->vcpu.arch.hyp_reqs->type = KVM_HYP_LAST_REQ;
 
-	if (pkvm_hyp_vcpu_is_protected(hyp_vcpu))
+	if (pkvm_hyp_vcpu_is_protected(hyp_vcpu)) {
 		kvm_init_pvm_id_regs(&hyp_vcpu->vcpu);
+		kvm_reset_pvm_sys_regs(&hyp_vcpu->vcpu);
+	}
 
 	ret = pkvm_vcpu_init_traps(hyp_vcpu);
 	if (ret)
@@ -597,8 +599,6 @@ static int init_pkvm_hyp_vcpu(struct pkvm_hyp_vcpu *hyp_vcpu,
 	ret = pkvm_vcpu_init_psci(hyp_vcpu, mp_state);
 	if (ret)
 		goto done;
-
-	kvm_reset_pvm_sys_regs(&hyp_vcpu->vcpu);
 done:
 	if (ret)
 		unpin_host_vcpu(hyp_vcpu);
