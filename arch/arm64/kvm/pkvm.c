@@ -1006,6 +1006,9 @@ int __pkvm_load_el2_module(struct module *this, unsigned long *token)
 	end = secs_map[ARRAY_SIZE(secs_map) - 1].sec->end;
 	size = end - start;
 
+	mod->sections.start = start;
+	mod->sections.end = end;
+
 	arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_alloc_module_va),
 			  size >> PAGE_SHIFT, &res);
 	if (res.a0 != SMCCC_RET_SUCCESS || !res.a1) {
@@ -1014,6 +1017,7 @@ int __pkvm_load_el2_module(struct module *this, unsigned long *token)
 		return res.a0 == SMCCC_RET_SUCCESS ? -ENOMEM : -EPERM;
 	}
 	hyp_va = (void *)res.a1;
+	mod->hyp_va = hyp_va;
 
 	/*
 	 * The token can be used for other calls related to this module.
@@ -1024,7 +1028,7 @@ int __pkvm_load_el2_module(struct module *this, unsigned long *token)
 		*token = (unsigned long)hyp_va;
 
 	endrel = (void *)mod->relocs + mod->nr_relocs * sizeof(*endrel);
-	kvm_apply_hyp_module_relocations(start, hyp_va, mod->relocs, endrel);
+	kvm_apply_hyp_module_relocations(mod, mod->relocs, endrel);
 
 	/*
 	 * Sadly we have also to disable kmemleak for EL1 sections: we can't
