@@ -1900,4 +1900,6 @@ int kvm_iommu_attach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 size_t smmu_hyp_pgt_pages(void);
 #endif
 
+#define __KVM_HAVE_ARCH_ASSIGNED_DEVICE_GROUP
+
 #endif /* __ARM64_KVM_HOST_H__ */
