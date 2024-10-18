@@ -506,6 +506,15 @@ static void pkvm_vcpu_init_psci(struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	struct vcpu_reset_state *reset_state = &hyp_vcpu->vcpu.arch.reset_state;
 
+	if (!pkvm_hyp_vcpu_is_protected(hyp_vcpu)) {
+		/*
+		 * The host is responsible for managing the vcpu state.
+		 * Treat it as always on as far as hyp is concerned.
+		 */
+		hyp_vcpu->power_state = PSCI_0_2_AFFINITY_LEVEL_ON;
+		return;
+	}
+
 	if (hyp_vcpu->vcpu.arch.mp_state.mp_state == KVM_MP_STATE_STOPPED) {
 		reset_state->reset = false;
 		hyp_vcpu->power_state = PSCI_0_2_AFFINITY_LEVEL_OFF;
