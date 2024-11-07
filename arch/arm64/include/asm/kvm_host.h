@@ -298,6 +298,7 @@ struct kvm_protected_vm {
 	gpa_t pvmfw_load_addr;
 	bool enabled;
 	bool smc_forwarded;
+	u32 ffa_support;
 };
 
 struct kvm_mpidr_data {
