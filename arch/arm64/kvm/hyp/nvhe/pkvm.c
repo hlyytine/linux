@@ -100,6 +100,23 @@ static void pvm_init_traps_hcr(struct kvm_vcpu *vcpu)
 	vcpu->arch.hcr_el2 = val;
 }
 
+static void pvm_init_traps_hcrx(struct kvm_vcpu *vcpu)
+{
+	struct kvm *kvm = vcpu->kvm;
+	u64 val = vcpu->arch.hcrx_el2;
+
+	if (!cpus_have_final_cap(ARM64_HAS_HCX))
+		return;
+
+	if (!kvm_has_feat(kvm, ID_AA64PFR1_EL1, NMI, IMP))
+		val |= HCRX_EL2_TALLINT;
+
+	if (!kvm_has_feat(kvm, ID_AA64PFR1_EL1, SME, IMP))
+		val |= HCRX_EL2_SMPME;
+
+	vcpu->arch.hcrx_el2 = val;
+}
+
 static void pvm_init_traps_mdcr(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
@@ -173,22 +190,18 @@ static int pkvm_vcpu_init_traps(struct pkvm_hyp_vcpu *hyp_vcpu)
 	vcpu->arch.mdcr_el2 = 0;
 
 	pkvm_vcpu_reset_hcr(vcpu);
+	vcpu_set_hcrx(vcpu);
 
-	if ((!pkvm_hyp_vcpu_is_protected(hyp_vcpu))) {
-		struct kvm_vcpu *host_vcpu = hyp_vcpu->host_vcpu;
-
-		/* Trust the host for non-protected vcpu features. */
-		vcpu->arch.hcrx_el2 = host_vcpu->arch.hcrx_el2;
+	if ((!pkvm_hyp_vcpu_is_protected(hyp_vcpu)))
 		return 0;
-	}
 
 	ret = pkvm_check_pvm_cpu_features(vcpu);
 	if (ret)
 		return ret;
 
 	pvm_init_traps_hcr(vcpu);
+	pvm_init_traps_hcrx(vcpu);
 	pvm_init_traps_mdcr(vcpu);
-	vcpu_set_hcrx(vcpu);
 
 	return 0;
 }
