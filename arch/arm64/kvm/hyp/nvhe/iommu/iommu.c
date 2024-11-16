@@ -4,6 +4,10 @@
  *
  * Copyright (C) 2022 Linaro Ltd.
  */
+#include <asm/kvm_hyp.h>
+
+#include <hyp/adjust_pc.h>
+
 #include <linux/iommu.h>
 
 #include <nvhe/iommu.h>
@@ -126,4 +130,15 @@ int kvm_iommu_disable_dev(pkvm_handle_t iommu, pkvm_handle_t dev)
 	if (kvm_iommu_ops && kvm_iommu_ops->disable_dev)
 		return kvm_iommu_ops->disable_dev(iommu, dev);
 	return -ENODEV;
+}
+
+bool kvm_iommu_host_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
+{
+	if (kvm_iommu_ops && kvm_iommu_ops->dabt_handler &&
+	    kvm_iommu_ops->dabt_handler(regs, esr, addr)) {
+		/* DABT handled by the driver, skip to next instruction. */
+		kvm_skip_host_instr();
+		return true;
+	}
+	return false;
 }

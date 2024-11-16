@@ -10,6 +10,7 @@ struct kvm_iommu_ops {
 	void (*host_stage2_idmap)(phys_addr_t start, phys_addr_t end, int prot);
 	int (*enable_dev)(pkvm_handle_t iommu, pkvm_handle_t dev);
 	int (*disable_dev)(pkvm_handle_t iommu, pkvm_handle_t dev);
+	bool (*dabt_handler)(struct user_pt_regs *regs, u64 esr, u64 addr);
 };
 
 int kvm_iommu_init(void *pool_base, size_t nr_pages);
@@ -20,4 +21,5 @@ void *kvm_iommu_donate_pages(u8 order);
 void kvm_iommu_reclaim_pages(void *ptr);
 int kvm_iommu_enable_dev(pkvm_handle_t iommu, pkvm_handle_t dev);
 int kvm_iommu_disable_dev(pkvm_handle_t iommu, pkvm_handle_t dev);
+bool kvm_iommu_host_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr);
 #endif /* __ARM64_KVM_NVHE_IOMMU_H__ */
