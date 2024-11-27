@@ -282,6 +282,10 @@ static inline u32 arm_smmu_strtab_l2_idx(u32 sid)
 		    STRTAB_STE_1_S1COR | STRTAB_STE_1_S1CSH |   \
 		    STRTAB_STE_1_S1STALLD | STRTAB_STE_1_EATS)
 
+#define EVTQ_ENT_SZ_SHIFT		5
+#define EVTQ_ENT_DWORDS			((1 << EVTQ_ENT_SZ_SHIFT) >> 3)
+#define EVTQ_MAX_SZ_SHIFT		(Q_MAX_SZ_SHIFT - EVTQ_ENT_SZ_SHIFT)
+
 /* Command queue */
 #define CMDQ_ENT_SZ_SHIFT		4
 #define CMDQ_ENT_DWORDS			((1 << CMDQ_ENT_SZ_SHIFT) >> 3)
