@@ -97,10 +97,6 @@ static inline unsigned int arm_smmu_cdtab_l2_idx(unsigned int ssid)
 #define CTXDESC_LINEAR_CDMAX		ilog2(SZ_64K / sizeof(struct arm_smmu_cd))
 
 /* Event queue */
-#define EVTQ_ENT_SZ_SHIFT		5
-#define EVTQ_ENT_DWORDS			((1 << EVTQ_ENT_SZ_SHIFT) >> 3)
-#define EVTQ_MAX_SZ_SHIFT		(Q_MAX_SZ_SHIFT - EVTQ_ENT_SZ_SHIFT)
-
 #define EVTQ_0_ID			GENMASK_ULL(7, 0)
 
 #define EVT_ID_BAD_STREAMID_CONFIG	0x02

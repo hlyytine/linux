@@ -387,6 +387,31 @@ err_disable_cmdq:
 	return smmu_write_cr0(smmu, 0);
 }
 
+static int smmu_init_evtq(struct hyp_arm_smmu_v3_device *smmu)
+{
+	size_t evtq_size, evtq_nr_pages;
+	size_t i;
+	int ret;
+
+	evtq_size = (1 << (smmu->evtq.llq.max_n_shift)) *
+		     EVTQ_ENT_DWORDS * 8;
+	evtq_nr_pages = PAGE_ALIGN(evtq_size) >> PAGE_SHIFT;
+	for (i = 0 ; i < evtq_nr_pages ; ++i) {
+		u64 evtq_pfn = hyp_phys_to_pfn(smmu->evtq.base_dma) + i;
+
+		/*
+		 * Evtq is not accessed by hyp, but set in shared state
+		 * to prevent donation/sharing it to VMs.
+		 */
+		ret = __pkvm_host_share_hyp(evtq_pfn);
+		if (ret)
+			return ret;
+	}
+
+	return hyp_pin_shared_mem(hyp_phys_to_virt(smmu->evtq.base_dma),
+				  hyp_phys_to_virt(smmu->evtq.base_dma + evtq_size));
+}
+
 static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 {
 	int i;
@@ -415,6 +440,10 @@ static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 	if (ret)
 		goto out_err;
 	ret = smmu_init_cmdq(smmu);
+	if (ret)
+		goto out_err;
+
+	ret = smmu_init_evtq(smmu);
 	if (ret)
 		goto out_err;
 

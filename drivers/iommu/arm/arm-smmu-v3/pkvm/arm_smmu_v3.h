@@ -17,6 +17,7 @@
  * @base		Virtual address of SMMU registers
  * @features		SMMUv3 features as defined in arm-smmu-v3-common.h
  * @cmdq		CMDQ queue struct
+ * @evtq		Event queu queue struct
  * @strtab_cfg		stream table config, strtab_cfg.l2.l2ptrs is not used
  * @ias			IAS of the SMMUv3
  * @oas			OAS of the SMMUv3
@@ -30,6 +31,7 @@ struct hyp_arm_smmu_v3_device {
 	void __iomem		*base;
 	unsigned long		features;
 	struct arm_smmu_queue	cmdq;
+	struct arm_smmu_queue	evtq;
 	struct arm_smmu_strtab_cfg strtab_cfg;
 	unsigned int            ias;
 	unsigned int            oas;
