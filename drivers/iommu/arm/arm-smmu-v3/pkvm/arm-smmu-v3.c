@@ -544,7 +544,8 @@ static void smmu_init_s2_ste(struct arm_smmu_ste *ste)
 	ste->data[3] = cfg->arm_lpae_s2_cfg.vttbr & STRTAB_STE_3_S2TTB_MASK;
 }
 
-static int smmu_enable_dev(pkvm_handle_t iommu, pkvm_handle_t dev)
+static int smmu_attach_dev(pkvm_handle_t iommu, pkvm_handle_t domain, pkvm_handle_t dev,
+			   u32 pasid, u32 pasid_bits, unsigned long flags)
 {
 	static struct arm_smmu_ste *ste, target;
 	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
@@ -573,7 +574,8 @@ out_ret:
 	return ret;
 }
 
-static int smmu_disable_dev(pkvm_handle_t iommu, pkvm_handle_t dev)
+static int smmu_detach_dev(pkvm_handle_t iommu, pkvm_handle_t domain, pkvm_handle_t dev,
+			   u32 pasid)
 {
 	static struct arm_smmu_ste *ste;
 	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
@@ -795,7 +797,7 @@ static bool smmu_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 struct kvm_iommu_ops smmu_ops = {
 	.init				= smmu_init,
 	.host_stage2_idmap		= smmu_host_stage2_idmap,
-	.enable_dev			= smmu_enable_dev,
-	.disable_dev			= smmu_disable_dev,
+	.attach_dev			= smmu_attach_dev,
+	.detach_dev			= smmu_detach_dev,
 	.dabt_handler			= smmu_dabt_handler,
 };
