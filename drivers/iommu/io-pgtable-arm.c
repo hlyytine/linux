@@ -189,11 +189,30 @@ arm_64_lpae_alloc_pgtable_s1(struct io_pgtable_cfg *cfg, void *cookie)
 	data = arm_lpae_alloc_pgtable(cfg);
 	if (!data)
 		return NULL;
-	if (arm_lpae_init_pgtable_s1(cfg, data, cookie)) {
-		kfree(data);
-		return NULL;
-	}
+	if (arm_lpae_init_pgtable_s1(cfg, data, cookie))
+		goto out_err;
+	/* Looking good; allocate a pgd */
+	data->pgd = __arm_lpae_alloc_pages(ARM_LPAE_PGD_SIZE(data),
+					   GFP_KERNEL, cfg, cookie);
+	if (!data->pgd)
+		goto out_err;
+
+	/* Ensure the empty pgd is visible before any actual TTBR write */
+	wmb();
+	/* TTBR */
+	cfg->arm_lpae_s1_cfg.ttbr = __arm_lpae_virt_to_phys(data->pgd);
+
 	return &data->iop;
+out_err:
+	kfree(data);
+	return NULL;
+}
+
+static int arm_64_lpae_configure_s1(struct io_pgtable_cfg *cfg)
+{
+	struct arm_lpae_io_pgtable data = {};
+
+	return arm_lpae_init_pgtable_s1(cfg, &data, NULL);
 }
 
 static struct io_pgtable *
@@ -204,11 +223,30 @@ arm_64_lpae_alloc_pgtable_s2(struct io_pgtable_cfg *cfg, void *cookie)
 	data = arm_lpae_alloc_pgtable(cfg);
 	if (!data)
 		return NULL;
-	if (arm_lpae_init_pgtable_s2(cfg, data, cookie)) {
-		kfree(data);
-		return NULL;
-	}
+	if (arm_lpae_init_pgtable_s2(cfg, data, cookie))
+		goto out_err;
+	/* Allocate pgd pages */
+	data->pgd = __arm_lpae_alloc_pages(PAGE_ALIGN(ARM_LPAE_PGD_SIZE(data)),
+					   GFP_KERNEL, cfg, cookie);
+	if (!data->pgd)
+		goto out_err;
+
+	/* Ensure the empty pgd is visible before any actual TTBR write */
+	wmb();
+
+	/* VTTBR */
+	cfg->arm_lpae_s2_cfg.vttbr = __arm_lpae_virt_to_phys(data->pgd);
 	return &data->iop;
+out_err:
+	kfree(data);
+	return NULL;
+}
+
+static int arm_64_lpae_configure_s2(struct io_pgtable_cfg *cfg)
+{
+	struct arm_lpae_io_pgtable data = {};
+
+	return arm_lpae_init_pgtable_s2(cfg, &data, NULL);
 }
 
 static struct io_pgtable *
@@ -297,12 +335,14 @@ struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s1_init_fns = {
 	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
 	.alloc	= arm_64_lpae_alloc_pgtable_s1,
 	.free	= arm_lpae_free_pgtable,
+	.configure = arm_64_lpae_configure_s1,
 };
 
 struct io_pgtable_init_fns io_pgtable_arm_64_lpae_s2_init_fns = {
 	.caps	= IO_PGTABLE_CAP_CUSTOM_ALLOCATOR,
 	.alloc	= arm_64_lpae_alloc_pgtable_s2,
 	.free	= arm_lpae_free_pgtable,
+	.configure = arm_64_lpae_configure_s2,
 };
 
 struct io_pgtable_init_fns io_pgtable_arm_32_lpae_s1_init_fns = {
