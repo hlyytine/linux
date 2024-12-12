@@ -6,8 +6,10 @@
  */
 #include <asm/kvm_hyp.h>
 
+#include <nvhe/alloc.h>
 #include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
+#include <nvhe/rwlock.h>
 #include <nvhe/trap_handler.h>
 
 #include "arm_smmu_v3.h"
@@ -49,6 +51,26 @@ struct hyp_arm_smmu_v3_device *kvm_hyp_arm_smmu_v3_smmus;
 	}							\
 	smmu_wait(_cond);					\
 })
+
+/*
+ * SMMUv3 domain:
+ * @domain: Pointer to the IOMMU domain.
+ * @iommu_list: List of SMMU instances for this domain
+ * @list_lock: Protects iommu_list
+ * @type: Type of domain (S1, S2)
+ * @pgt_lock: Lock for page table
+ * @pgtable: io_pgtable instance for this domain
+ */
+struct hyp_arm_smmu_v3_domain {
+	struct kvm_hyp_iommu_domain     *domain;
+	struct list_head		iommu_list;
+	hyp_rwlock_t			list_lock;
+	u32				type;
+	hyp_spinlock_t			pgt_lock;
+	struct io_pgtable		*pgtable;
+};
+
+#define is_idmap_domain(domain)		(!(domain)->domain_id)
 
 static struct io_pgtable *idmap_pgtable;
 
@@ -793,6 +815,52 @@ static bool smmu_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 	return false;
 }
 
+static int smmu_alloc_domain(struct kvm_hyp_iommu_domain *domain, int type)
+{
+	struct hyp_arm_smmu_v3_domain *smmu_domain;
+
+	if (type >= KVM_ARM_SMMU_DOMAIN_MAX)
+		return -EINVAL;
+
+	/*
+	 * At the moment the hypervisor only manages one shadow page table for all
+	 * SMMUv3, this belongs to a singled domain which is domain 0.
+	 * So only allow bypass for domain 0.
+	 */
+	if ((type == KVM_ARM_SMMU_DOMAIN_BYPASS && !is_idmap_domain(domain)) ||
+	    (type != KVM_ARM_SMMU_DOMAIN_BYPASS && is_idmap_domain(domain)))
+		return -EINVAL;
+
+	smmu_domain = hyp_alloc(sizeof(*smmu_domain));
+	if (!smmu_domain)
+		return -ENOMEM;
+
+	/*
+	 * Can't do much without knowing the SMMUv3 features.
+	 * Page table will be allocated at attach_dev, but can be
+	 * freed from free domain.
+	 */
+	smmu_domain->domain = domain;
+	smmu_domain->type = type;
+	INIT_LIST_HEAD(&smmu_domain->iommu_list);
+	hyp_rwlock_init(&smmu_domain->list_lock);
+	hyp_spin_lock_init(&smmu_domain->pgt_lock);
+	domain->priv = (void *)smmu_domain;
+
+	return 0;
+}
+
+static void smmu_free_domain(struct kvm_hyp_iommu_domain *domain)
+{
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+
+	/* This ptr is populated lazily at attach so it might not exist. */
+	if (smmu_domain->pgtable)
+		kvm_arm_io_pgtable_free(smmu_domain->pgtable);
+
+	hyp_free(smmu_domain);
+}
+
 /* Shared with the kernel driver in EL1 */
 struct kvm_iommu_ops smmu_ops = {
 	.init				= smmu_init,
@@ -800,4 +868,6 @@ struct kvm_iommu_ops smmu_ops = {
 	.attach_dev			= smmu_attach_dev,
 	.detach_dev			= smmu_detach_dev,
 	.dabt_handler			= smmu_dabt_handler,
+	.alloc_domain			= smmu_alloc_domain,
+	.free_domain			= smmu_free_domain,
 };
