@@ -204,7 +204,7 @@ static void kvm_arm_smmu_release_device(struct device *dev)
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		kvm_call_hyp_nvhe(__pkvm_iommu_disable_dev, host_smmu->id, sid);
+		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id, 0, sid, 0);
 	}
 	arm_smmu_remove_master(master);
 }
@@ -226,14 +226,14 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		ret = kvm_call_hyp_nvhe(__pkvm_iommu_enable_dev, host_smmu->id, sid);
+		ret = kvm_call_hyp_nvhe(__pkvm_host_iommu_attach_dev, host_smmu->id, 0, sid, 0, 0, 0);
 		if (ret)
 			goto out_err;
 	}
 	return ret;
 out_err:
 	while (i--)
-		kvm_call_hyp_nvhe(__pkvm_iommu_disable_dev, host_smmu->id, fwspec->ids[i]);
+		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id, 0, fwspec->ids[i], 0);
 
 	return ret;
 }

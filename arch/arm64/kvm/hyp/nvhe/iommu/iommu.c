@@ -120,18 +120,51 @@ void kvm_iommu_reclaim_pages(void *ptr)
 	hyp_put_page(&iommu_pages_pool, ptr);
 }
 
-int kvm_iommu_enable_dev(pkvm_handle_t iommu, pkvm_handle_t dev)
+int kvm_iommu_alloc_domain(pkvm_handle_t domain_id, int type)
 {
-	if (kvm_iommu_ops && kvm_iommu_ops->enable_dev)
-		return kvm_iommu_ops->enable_dev(iommu, dev);
 	return -ENODEV;
 }
 
-int kvm_iommu_disable_dev(pkvm_handle_t iommu, pkvm_handle_t dev)
+int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 {
-	if (kvm_iommu_ops && kvm_iommu_ops->disable_dev)
-		return kvm_iommu_ops->disable_dev(iommu, dev);
 	return -ENODEV;
+}
+
+int kvm_iommu_attach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
+			 u32 endpoint_id, u32 pasid, u32 pasid_bits, unsigned long flags)
+{
+	if (kvm_iommu_ops && kvm_iommu_ops->attach_dev)
+		return kvm_iommu_ops->attach_dev(iommu_id, domain_id,
+						 endpoint_id, pasid, pasid_bits, flags);
+
+	return -ENODEV;
+}
+
+int kvm_iommu_detach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
+			 u32 endpoint_id, u32 pasid)
+{
+	if (kvm_iommu_ops && kvm_iommu_ops->detach_dev)
+		return kvm_iommu_ops->detach_dev(iommu_id, domain_id, endpoint_id, pasid);
+
+	return -ENODEV;
+}
+
+int kvm_iommu_map_pages(pkvm_handle_t domain_id,
+			unsigned long iova, phys_addr_t paddr, size_t pgsize,
+			size_t pgcount, int prot, unsigned long *mapped)
+{
+	return 0;
+}
+
+size_t kvm_iommu_unmap_pages(pkvm_handle_t domain_id, unsigned long iova,
+			     size_t pgsize, size_t pgcount)
+{
+	return 0;
+}
+
+phys_addr_t kvm_iommu_iova_to_phys(pkvm_handle_t domain_id, unsigned long iova)
+{
+	return 0;
 }
 
 bool kvm_iommu_host_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
