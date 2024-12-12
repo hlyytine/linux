@@ -2305,3 +2305,125 @@ teardown:
 	pkvm_ptdump_teardown_log(log, NULL);
 	return ret;
 }
+
+static void __pkvm_host_use_dma_page(phys_addr_t phys_addr)
+{
+	struct hyp_page *p = hyp_phys_to_page(phys_addr);
+
+	hyp_page_ref_inc(p);
+}
+
+static void __pkvm_host_unuse_dma_page(phys_addr_t phys_addr)
+{
+	struct hyp_page *p = hyp_phys_to_page(phys_addr);
+
+	hyp_page_ref_dec(p);
+}
+
+static int __pkvm_use_dma_locked(phys_addr_t phys_addr, size_t size)
+{
+	int i;
+	int ret = 0;
+	struct kvm_mem_range r;
+	size_t nr_pages = size >> PAGE_SHIFT;
+	struct memblock_region *reg = find_mem_range(phys_addr, &r);
+
+	if (WARN_ON(!PAGE_ALIGNED(phys_addr | size)) || !is_in_mem_range(phys_addr + size - 1, &r))
+		return -EINVAL;
+
+	/*
+	 * Some differences between handling of RAM and device memory:
+	 * - The hyp vmemmap area for device memory is not backed by physical
+	 *   pages in the hyp page tables.
+	 * - However, in some cases modules can donate MMIO, as they can't be
+	 *   refcounted, taint them by marking them as shared PKVM_PAGE_TAINTED, and that
+	 *   will prevent any future transition.
+	 */
+	if (!reg) {
+		enum kvm_pgtable_prot prot;
+
+		for (i = 0; i < nr_pages; i++) {
+			u64 addr = phys_addr + i * PAGE_SIZE;
+
+			ret = ___host_check_page_state_range(addr, PAGE_SIZE,
+							     PKVM_PAGE_TAINTED,
+							     reg, false);
+			/* Page already tainted */
+			if (!ret)
+				continue;
+			ret = ___host_check_page_state_range(addr, PAGE_SIZE,
+							     PKVM_PAGE_OWNED,
+							     reg, false);
+			if (ret)
+				return ret;
+		}
+		prot = pkvm_mkstate(PKVM_HOST_MMIO_PROT, PKVM_PAGE_TAINTED);
+		WARN_ON(host_stage2_idmap_locked(phys_addr, size, prot));
+	} else {
+		/* For VMs, we know if we reach this point the VM has access to the page. */
+		for (i = 0; i < nr_pages; i++) {
+			enum pkvm_page_state state;
+			phys_addr_t this_addr = phys_addr + i * PAGE_SIZE;
+
+			state = hyp_phys_to_page(this_addr)->host_state;
+			if (state != PKVM_PAGE_OWNED) {
+				ret = -EPERM;
+				break;
+			}
+		}
+		if (ret)
+			return ret;
+		for (i = 0; i < nr_pages; i++)
+			__pkvm_host_use_dma_page(phys_addr + i * PAGE_SIZE);
+	}
+
+	return ret;
+}
+
+/*
+ * __pkvm_use_dma - Mark memory as used for DMA
+ * @phys_addr:	physical address of the DMA region
+ * @size:	size of the DMA region
+ * When a page is mapped in an IOMMU page table for DMA, it must
+ * not be donated to a guest or the hypervisor we ensure this with:
+ * - Host can only map pages that are OWNED
+ * - Any page that is mapped is refcounted
+ * - Donation/Sharing is prevented from refcount check in
+ *   ___host_check_page_state_range()
+ * - No MMIO transtion is allowed beyond IOMMU MMIO which
+ *   happens during de-privilege.
+ * In case in the future shared pages are allowed to be mapped,
+ * similar checks are needed in host_request_unshare() and
+ * host_ack_unshare()
+ */
+int __pkvm_host_use_dma(phys_addr_t phys_addr, size_t size)
+{
+	int ret;
+
+	host_lock_component();
+	ret = __pkvm_use_dma_locked(phys_addr, size);
+	host_unlock_component();
+	return ret;
+}
+
+int __pkvm_host_unuse_dma(phys_addr_t phys_addr, size_t size)
+{
+	int i;
+	size_t nr_pages = size >> PAGE_SHIFT;
+
+	if (WARN_ON(!PAGE_ALIGNED(phys_addr | size)))
+		return -EINVAL;
+	if (!range_is_memory(phys_addr, phys_addr + size))
+		return 0;
+	host_lock_component();
+	/*
+	 * We end up here after the caller successfully unmapped the page from
+	 * the IOMMU table. Which means that a ref is held, the page is shared
+	 * in the host s2, there can be no failure.
+	 */
+	for (i = 0; i < nr_pages; i++)
+		__pkvm_host_unuse_dma_page(phys_addr + i * PAGE_SIZE);
+
+	host_unlock_component();
+	return 0;
+}

@@ -90,9 +90,14 @@ int refill_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages,
 
 int module_change_host_page_prot(u64 pfn, enum kvm_pgtable_prot prot,
 				 u64 nr_pages, bool update_iommu);
+int __pkvm_host_use_dma(u64 phys_addr, size_t size);
+int __pkvm_host_unuse_dma(u64 phys_addr, size_t size);
 
 void psci_mem_protect_inc(u64 n);
 void psci_mem_protect_dec(u64 n);
+
+int __pkvm_host_use_dma(phys_addr_t phys_addr, size_t size);
+int __pkvm_host_unuse_dma(phys_addr_t phys_addr, size_t size);
 
 static __always_inline void __load_host_stage2(void)
 {
