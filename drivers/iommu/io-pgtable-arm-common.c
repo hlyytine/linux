@@ -198,18 +198,6 @@ int arm_lpae_init_pgtable_s1(struct io_pgtable_cfg *cfg,
 	       << ARM_LPAE_MAIR_ATTR_SHIFT(ARM_LPAE_MAIR_ATTR_IDX_INC_OCACHE));
 
 	cfg->arm_lpae_s1_cfg.mair = reg;
-
-	/* Looking good; allocate a pgd */
-	data->pgd = __arm_lpae_alloc_pages(ARM_LPAE_PGD_SIZE(data),
-					   GFP_KERNEL, cfg, cookie);
-	if (!data->pgd)
-		return -ENOMEM;
-
-	/* Ensure the empty pgd is visible before any actual TTBR write */
-	wmb();
-
-	/* TTBR */
-	cfg->arm_lpae_s1_cfg.ttbr = __arm_lpae_virt_to_phys(data->pgd);
 	return 0;
 }
 
@@ -292,17 +280,6 @@ int arm_lpae_init_pgtable_s2(struct io_pgtable_cfg *cfg,
 	vtcr->tsz = 64ULL - cfg->ias;
 	vtcr->sl = ~sl & ARM_LPAE_VTCR_SL0_MASK;
 
-	/* Allocate pgd pages */
-	data->pgd = __arm_lpae_alloc_pages(PAGE_ALIGN(ARM_LPAE_PGD_SIZE(data)),
-					   GFP_KERNEL, cfg, cookie);
-	if (!data->pgd)
-		return -ENOMEM;
-
-	/* Ensure the empty pgd is visible before any actual TTBR write */
-	wmb();
-
-	/* VTTBR */
-	cfg->arm_lpae_s2_cfg.vttbr = __arm_lpae_virt_to_phys(data->pgd);
 	return 0;
 }
 
