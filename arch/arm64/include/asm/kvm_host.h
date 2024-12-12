@@ -1785,6 +1785,15 @@ int kvm_iommu_init_driver(void);
 void kvm_iommu_remove_driver(void);
 size_t kvm_iommu_pages(void);
 
+/*
+ * Unlike previous android versions, where we supported 1 << 16 domains,
+ * this added a lot of unneeded complexity, sharing code and struts with EL1,
+ * memory allocation in different contexts and handling error cases.
+ * We switched to a static array for simplicity with 512 domains which is more
+ * that enough.
+ */
+#define KVM_IOMMU_MAX_DOMAINS		512
+
 #ifdef CONFIG_ARM_SMMU_V3_PKVM
 size_t smmu_hyp_pgt_pages(void);
 #endif

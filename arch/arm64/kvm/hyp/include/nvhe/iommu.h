@@ -7,6 +7,12 @@
 
 #include <nvhe/alloc_mgt.h>
 
+struct kvm_hyp_iommu_domain {
+	atomic_t		refs;
+	pkvm_handle_t		domain_id;
+	void			*priv;
+};
+
 struct kvm_iommu_ops {
 	int (*init)(void);
 	void (*host_stage2_idmap)(phys_addr_t start, phys_addr_t end, int prot);
@@ -15,6 +21,8 @@ struct kvm_iommu_ops {
 	int (*detach_dev)(pkvm_handle_t iommu, pkvm_handle_t domain, pkvm_handle_t dev,
 			  u32 pasid);
 	bool (*dabt_handler)(struct user_pt_regs *regs, u64 esr, u64 addr);
+	int (*alloc_domain)(struct kvm_hyp_iommu_domain *domain, int type);
+	void (*free_domain)(struct kvm_hyp_iommu_domain *domain);
 };
 
 int kvm_iommu_init(void *pool_base, size_t nr_pages);
