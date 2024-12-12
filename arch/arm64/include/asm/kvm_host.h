@@ -1776,6 +1776,7 @@ void check_feature_map(void);
 
 /* Allocator interface IDs. */
 #define HYP_ALLOC_MGT_HEAP_ID          0
+#define HYP_ALLOC_MGT_IOMMU_ID         1
 
 unsigned long __pkvm_reclaim_hyp_alloc_mgt(unsigned long nr_pages);
 int __pkvm_topup_hyp_alloc_mgt_gfp(unsigned long id, unsigned long nr_pages,
