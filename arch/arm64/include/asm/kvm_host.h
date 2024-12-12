@@ -157,6 +157,8 @@ static inline void __free_hyp_memcache(struct kvm_hyp_memcache *mc,
 
 void free_hyp_memcache(struct kvm_hyp_memcache *mc);
 int topup_hyp_memcache(struct kvm_hyp_memcache *mc, unsigned long min_pages, unsigned long order);
+int topup_hyp_memcache_gfp(struct kvm_hyp_memcache *mc, unsigned long min_pages,
+			   unsigned long order, gfp_t gfp);
 
 static inline void init_hyp_memcache(struct kvm_hyp_memcache *mc)
 {
@@ -1757,6 +1759,9 @@ static inline bool kvm_arch_has_irq_bypass(void)
 #define HYP_ALLOC_MGT_HEAP_ID          0
 
 unsigned long __pkvm_reclaim_hyp_alloc_mgt(unsigned long nr_pages);
+int __pkvm_topup_hyp_alloc_mgt_gfp(unsigned long id, unsigned long nr_pages,
+				   unsigned long sz_alloc, gfp_t gfp);
+
 struct kvm_iommu_driver {
 	int (*init_driver)(void);
 	void (*remove_driver)(void);
