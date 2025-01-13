@@ -90,36 +90,35 @@ static void pkvm_vcpu_reset_hcrx(struct pkvm_hyp_vcpu *hyp_vcpu)
 static void pvm_init_traps_hcr(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
-	u64 hcr_clear = 0;
-	u64 hcr_set = 0;
+	u64 val = vcpu->arch.hcr_el2;
 
-	hcr_set |= HCR_RW;
+	/* No support for AArch32. */
+	val |= HCR_RW;
 
 	/*
 	 * Always trap:
 	 * - Feature id registers: to control features exposed to guests
 	 * - Implementation-defined features
 	 */
-	hcr_set |= HCR_TACR | HCR_TIDCP | HCR_TID3 | HCR_TID1;
+	val |= HCR_TACR | HCR_TIDCP | HCR_TID3 | HCR_TID1;
 
 	if (!kvm_has_feat(kvm, ID_AA64PFR0_EL1, RAS, IMP)) {
-		hcr_set |= HCR_TERR | HCR_TEA;
-		hcr_clear |= HCR_FIEN;
+		val |= HCR_TERR | HCR_TEA;
+		val &= ~(HCR_FIEN);
 	}
 
 	if (!kvm_has_feat(kvm, ID_AA64PFR0_EL1, AMU, IMP))
-		hcr_clear |= HCR_AMVOFFEN;
+		val &= ~(HCR_AMVOFFEN);
 
 	if (!kvm_has_feat(kvm, ID_AA64PFR1_EL1, MTE, IMP)) {
-		hcr_set |= HCR_TID5;
-		hcr_clear |= HCR_DCT | HCR_ATA;
+		val |= HCR_TID5;
+		val &= ~(HCR_DCT | HCR_ATA);
 	}
 
 	if (!kvm_has_feat(kvm, ID_AA64MMFR1_EL1, LO, IMP))
-		hcr_set |= HCR_TLOR;
+		val |= HCR_TLOR;
 
-	vcpu->arch.hcr_el2 |= hcr_set;
-	vcpu->arch.hcr_el2 &= ~hcr_clear;
+	vcpu->arch.hcr_el2 = val;
 }
 
 static void pvm_init_traps_hcrx(struct kvm_vcpu *vcpu)
