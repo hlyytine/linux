@@ -761,9 +761,15 @@ static void sync_debug_state(struct pkvm_hyp_vcpu *hyp_vcpu)
 {
 	struct kvm_vcpu *host_vcpu = hyp_vcpu->host_vcpu;
 
-	if (kvm_guest_owns_debug_regs(&hyp_vcpu->vcpu))
+	if (kvm_guest_owns_debug_regs(&hyp_vcpu->vcpu)) {
+		struct kvm_vcpu *vcpu = &hyp_vcpu->vcpu;
+
 		host_vcpu->arch.vcpu_debug_state = hyp_vcpu->vcpu.arch.vcpu_debug_state;
-	else if (kvm_host_owns_debug_regs(&hyp_vcpu->vcpu))
+		vcpu_write_sys_reg(host_vcpu, vcpu_read_sys_reg(vcpu, MDSCR_EL1),
+				   MDSCR_EL1);
+		*vcpu_cpsr(host_vcpu) = *vcpu_cpsr(vcpu);
+
+	} else if (kvm_host_owns_debug_regs(&hyp_vcpu->vcpu))
 		host_vcpu->arch.external_debug_state = hyp_vcpu->vcpu.arch.external_debug_state;
 }
 
