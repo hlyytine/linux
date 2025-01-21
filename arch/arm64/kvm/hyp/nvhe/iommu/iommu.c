@@ -436,3 +436,13 @@ phys_addr_t kvm_iommu_iova_to_phys(pkvm_handle_t domain_id, unsigned long iova)
 	return phys;
 }
 
+void kvm_iommu_host_stage2_idmap_complete(bool map)
+{
+	if (!kvm_idmap_initialized ||
+	    !kvm_iommu_ops->host_stage2_idmap_complete)
+		return;
+
+	trace_iommu_idmap_complete(map);
+	kvm_iommu_ops->host_stage2_idmap_complete(map);
+}
+

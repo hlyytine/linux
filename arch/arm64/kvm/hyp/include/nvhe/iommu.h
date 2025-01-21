@@ -34,6 +34,7 @@ struct kvm_iommu_ops {
 	phys_addr_t (*iova_to_phys)(struct kvm_hyp_iommu_domain *domain, unsigned long iova);
 	void (*iotlb_sync)(struct kvm_hyp_iommu_domain *domain,
 			   struct iommu_iotlb_gather *gather);
+	void (*host_stage2_idmap_complete)(bool map);
 };
 
 int kvm_iommu_init(void *pool_base, size_t nr_pages, struct kvm_iommu_ops *ops);
@@ -59,6 +60,7 @@ int kvm_iommu_map_pages(pkvm_handle_t domain_id,
 size_t kvm_iommu_unmap_pages(pkvm_handle_t domain_id, unsigned long iova,
 			     size_t pgsize, size_t pgcount);
 phys_addr_t kvm_iommu_iova_to_phys(pkvm_handle_t domain_id, unsigned long iova);
+void kvm_iommu_host_stage2_idmap_complete(bool map);
 
 /* Flags for memory allocation for IOMMU drivers */
 #define IOMMU_PAGE_NOCACHE                             BIT(0)
