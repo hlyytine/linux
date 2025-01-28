@@ -1257,11 +1257,13 @@ int ___pkvm_host_donate_hyp(u64 pfn, u64 nr_pages, bool accept_mmio)
 
 int __pkvm_host_donate_hyp_locked(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	void *virt = __hyp_va(phys);
 	enum kvm_pgtable_prot prot;
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	hyp_assert_lock_held(&host_mmu.lock);
 	hyp_lock_component();
@@ -1293,10 +1295,12 @@ unlock:
 
 int __pkvm_hyp_donate_host(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	u64 virt = (u64)__hyp_va(phys);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	hyp_lock_component();
@@ -1450,9 +1454,11 @@ void hyp_unpin_shared_mem(void *from, void *to)
 
 int __pkvm_host_share_ffa(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	ret = __host_check_page_state_range(phys, size, PKVM_PAGE_OWNED);
@@ -1465,9 +1471,11 @@ int __pkvm_host_share_ffa(u64 pfn, u64 nr_pages)
 
 int __pkvm_host_unshare_ffa(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	ret = __host_check_page_state_range(phys, size, PKVM_PAGE_SHARED_OWNED);
@@ -1529,10 +1537,13 @@ static int __host_donate_guest(struct pkvm_hyp_vcpu *vcpu, u64 phys, u64 ipa, si
 int __pkvm_host_donate_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu, u64 nr_pages)
 {
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
-	size_t size = nr_pages * PAGE_SIZE;
 	u64 phys = hyp_pfn_to_phys(pfn);
 	u64 ipa = hyp_pfn_to_phys(gfn);
+	size_t size;
 	int ret;
+
+	if (check_mul_overflow(nr_pages, PAGE_SIZE, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	guest_lock_component(vm);
@@ -1689,10 +1700,13 @@ static int get_valid_guest_pte(struct pkvm_hyp_vm *vm, u64 ipa, kvm_pte_t *ptep,
 int __pkvm_host_reclaim_page_guest(u64 gfn, struct pkvm_hyp_vm *vm, u8 order)
 {
 	u64 ipa = hyp_pfn_to_phys(gfn);
-	size_t page_size = PAGE_SIZE << order;
+	size_t page_size;
 	kvm_pte_t pte;
 	u64 phys;
 	int ret;
+
+	if (check_shl_overflow(PAGE_SIZE, order, &page_size))
+		return -EINVAL;
 
 	host_lock_component();
 	guest_lock_component(vm);
@@ -1806,12 +1820,15 @@ int __pkvm_host_share_guest(u64 pfn, u64 gfn, struct pkvm_hyp_vcpu *vcpu, u64 nr
 			    enum kvm_pgtable_prot prot)
 {
 	struct pkvm_hyp_vm *vm = pkvm_hyp_vcpu_to_hyp_vm(vcpu);
-	size_t size = nr_pages * PAGE_SIZE;
 	u64 phys = hyp_pfn_to_phys(pfn);
 	u64 ipa = hyp_pfn_to_phys(gfn);
 	struct hyp_page *page;
+	size_t size;
 	u64 end;
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	if (prot & ~KVM_PGTABLE_PROT_RWX)
 		return -EINVAL;
