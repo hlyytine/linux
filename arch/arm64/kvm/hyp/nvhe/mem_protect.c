@@ -1203,10 +1203,12 @@ int ___pkvm_host_donate_hyp(u64 pfn, u64 nr_pages, bool accept_mmio)
 
 int __pkvm_host_donate_hyp_locked(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	void *virt = __hyp_va(phys);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	hyp_assert_lock_held(&host_mmu.lock);
 	hyp_lock_component();
@@ -1236,10 +1238,12 @@ unlock:
 
 int __pkvm_hyp_donate_host(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	u64 virt = (u64)__hyp_va(phys);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	hyp_lock_component();
@@ -1415,9 +1419,11 @@ void hyp_unpin_shared_mem(void *from, void *to)
 
 int __pkvm_host_share_ffa(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	ret = __host_check_page_state_range(phys, size, PKVM_PAGE_OWNED);
@@ -1430,9 +1436,11 @@ int __pkvm_host_share_ffa(u64 pfn, u64 nr_pages)
 
 int __pkvm_host_unshare_ffa(u64 pfn, u64 nr_pages)
 {
-	u64 phys = hyp_pfn_to_phys(pfn);
-	u64 size = PAGE_SIZE * nr_pages;
+	u64 size, phys = hyp_pfn_to_phys(pfn);
 	int ret;
+
+	if (check_shl_overflow(nr_pages, PAGE_SHIFT, &size))
+		return -EINVAL;
 
 	host_lock_component();
 	ret = __host_check_page_state_range(phys, size, PKVM_PAGE_SHARED_OWNED);
