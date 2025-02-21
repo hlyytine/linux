@@ -79,7 +79,7 @@ do {							\
 #define trace_hyp_printk(fmt, ...) \
 	__trace_hyp_printk_N(fmt, __VA_ARGS__)
 
-#ifdef CONFIG_PROTECTED_NVHE_FTRACE
+#ifdef CONFIG_PKVM_FTRACE
 void hyp_ftrace_setup_core(void);
 void *hyp_ftrace_sync(unsigned long *func_pg, unsigned long *funcs,
 		      unsigned long *funcs_end, unsigned long offset_idx,
@@ -97,7 +97,7 @@ static inline int hyp_ftrace_setup(unsigned long *funcs, unsigned long *funcs_en
 				   unsigned long hyp_kern_offset, void *tramp) { return 0; }
 static inline int __pkvm_sync_ftrace(unsigned long host_func_pg) { return -EOPNOTSUPP; }
 static inline int __pkvm_disable_ftrace(void) { return -EOPNOTSUPP; }
-#endif /* CONFIG_PROTECTED_NVHE_FTRACE */
+#endif /* CONFIG_PKVM_FTRACE */
 #else /* CONFIG_TRACING */
 static inline void *tracing_reserve_entry(unsigned long length) { return NULL; }
 static inline void tracing_commit_entry(void) { }
