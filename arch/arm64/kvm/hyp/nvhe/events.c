@@ -21,7 +21,7 @@ static struct {
 	struct hyp_event_id	*end;
 } event_id_mod[MAX_EVENT_ID_MOD];
 
-#ifdef CONFIG_PROTECTED_NVHE_FTRACE
+#ifdef CONFIG_PKVM_FTRACE
 int __pkvm_sync_ftrace(unsigned long host_funcs_pg)
 {
 	unsigned long *funcs_pg = (unsigned long *)kern_hyp_va(host_funcs_pg);
