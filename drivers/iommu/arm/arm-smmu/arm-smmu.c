@@ -1315,13 +1315,30 @@ static bool arm_smmu_capable(struct device *dev, enum iommu_cap cap)
 	switch (cap) {
 	case IOMMU_CAP_CACHE_COHERENCY:
 		/*
+		 * Start: Original comment and code!
+		 *
 		 * It's overwhelmingly the case in practice that when the pagetable
 		 * walk interface is connected to a coherent interconnect, all the
 		 * translation interfaces are too. Furthermore if the device is
 		 * natively coherent, then its translation interface must also be.
+		 *
+		 * return cfg->smmu->features & ARM_SMMU_FEAT_COHERENT_WALK ||
+		 *	 device_get_dma_attr(dev) == DEV_DMA_COHERENT;
+		 *
+		 * End: Original comment and code!
 		 */
-		return cfg->smmu->features & ARM_SMMU_FEAT_COHERENT_WALK ||
-			device_get_dma_attr(dev) == DEV_DMA_COHERENT;
+
+		/*
+		 * Speicific change (hack) is for Nvidia Orin AGX/NX. Their
+		 * SMMUs does not support SMMU coherent walk and therefore
+		 * vfio-pci passthrough would not work. It requires coherent walk.
+		 * In other words SMMU-node should contain dma-coherent property.
+		 *
+		 * Eventhough NVIDIA SMMU node does not contain dma-coherent then
+		 * returning true for IOMMU_CAP_CACHE_COHERENCY, because it has
+		 * worked *fine*. Obviously it might introduces unseen issues.
+		 */
+		return true;
 	case IOMMU_CAP_NOEXEC:
 	case IOMMU_CAP_DEFERRED_FLUSH:
 		return true;
