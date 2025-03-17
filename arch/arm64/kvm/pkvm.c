@@ -102,11 +102,9 @@ void __init kvm_hyp_reserve(void)
 		 hyp_mem_base);
 }
 
-static void __pkvm_destroy_hyp_vm(struct kvm *host_kvm)
+static void __pkvm_finalize_destroy_hyp_vm(struct kvm *host_kvm)
 {
 	if (host_kvm->arch.pkvm.handle) {
-		WARN_ON(kvm_call_hyp_nvhe(__pkvm_start_teardown_vm,
-					  host_kvm->arch.pkvm.handle));
 		WARN_ON(kvm_call_hyp_nvhe(__pkvm_finalize_teardown_vm,
 					  host_kvm->arch.pkvm.handle));
 	}
@@ -219,10 +217,10 @@ int pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu)
 	return ret;
 }
 
-void pkvm_destroy_hyp_vm(struct kvm *host_kvm)
+void pkvm_finalize_destroy_hyp_vm(struct kvm *host_kvm)
 {
 	mutex_lock(&host_kvm->arch.config_lock);
-	__pkvm_destroy_hyp_vm(host_kvm);
+	__pkvm_finalize_destroy_hyp_vm(host_kvm);
 	mutex_unlock(&host_kvm->arch.config_lock);
 }
 
@@ -341,14 +339,21 @@ void pkvm_pgtable_stage2_destroy(struct kvm_pgtable *pgt)
 	if (!handle)
 		return;
 
+	WARN_ON(kvm_call_hyp_nvhe(__pkvm_start_teardown_vm, handle));
+
 	node = rb_first(&pgt->pkvm_mappings);
 	while (node) {
 		mapping = rb_entry(node, struct pkvm_mapping, node);
-		kvm_call_hyp_nvhe(__pkvm_host_unshare_guest, handle, mapping->gfn);
+		if (kvm_vm_is_protected(kvm))
+			kvm_call_hyp_nvhe(__pkvm_reclaim_dying_guest_page, handle, mapping->gfn);
+		else
+			kvm_call_hyp_nvhe(__pkvm_host_unshare_guest, handle, mapping->gfn);
 		node = rb_next(node);
 		rb_erase(&mapping->node, &pgt->pkvm_mappings);
 		kfree(mapping);
 	}
+
+	/* The finalization of the VM teardown is done from kvm_arch_destroy_vm() */
 }
 
 int pkvm_pgtable_stage2_map(struct kvm_pgtable *pgt, u64 addr, u64 size,
@@ -388,6 +393,9 @@ int pkvm_pgtable_stage2_unmap(struct kvm_pgtable *pgt, u64 addr, u64 size)
 	struct pkvm_mapping *mapping;
 	int ret = 0;
 
+	if (WARN_ON(kvm_vm_is_protected(kvm)))
+		return -EPERM;
+
 	lockdep_assert_held_write(&kvm->mmu_lock);
 	for_each_mapping_in_range_safe(pgt, addr, addr + size, mapping) {
 		ret = kvm_call_hyp_nvhe(__pkvm_host_unshare_guest, handle, mapping->gfn);
@@ -406,6 +414,9 @@ int pkvm_pgtable_stage2_wrprotect(struct kvm_pgtable *pgt, u64 addr, u64 size)
 	pkvm_handle_t handle = kvm->arch.pkvm.handle;
 	struct pkvm_mapping *mapping;
 	int ret = 0;
+
+	if (WARN_ON(kvm_vm_is_protected(kvm)))
+		return -EPERM;
 
 	lockdep_assert_held(&kvm->mmu_lock);
 	for_each_mapping_in_range_safe(pgt, addr, addr + size, mapping) {
@@ -436,6 +447,9 @@ bool pkvm_pgtable_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr, u64
 	struct pkvm_mapping *mapping;
 	bool young = false;
 
+	if (WARN_ON(kvm_vm_is_protected(kvm)))
+		return -EPERM;
+
 	lockdep_assert_held(&kvm->mmu_lock);
 	for_each_mapping_in_range_safe(pgt, addr, addr + size, mapping)
 		young |= kvm_call_hyp_nvhe(__pkvm_host_test_clear_young_guest, handle, mapping->gfn,
@@ -447,12 +461,18 @@ bool pkvm_pgtable_stage2_test_clear_young(struct kvm_pgtable *pgt, u64 addr, u64
 int pkvm_pgtable_stage2_relax_perms(struct kvm_pgtable *pgt, u64 addr, enum kvm_pgtable_prot prot,
 				    enum kvm_pgtable_walk_flags flags)
 {
+	if (WARN_ON(kvm_vm_is_protected(kvm_s2_mmu_to_kvm(pgt->mmu))))
+		return -EPERM;
+
 	return kvm_call_hyp_nvhe(__pkvm_host_relax_perms_guest, addr >> PAGE_SHIFT, prot);
 }
 
 void pkvm_pgtable_stage2_mkyoung(struct kvm_pgtable *pgt, u64 addr,
 				 enum kvm_pgtable_walk_flags flags)
 {
+	if (WARN_ON(kvm_vm_is_protected(kvm_s2_mmu_to_kvm(pgt->mmu))))
+		return;
+
 	WARN_ON(kvm_call_hyp_nvhe(__pkvm_host_mkyoung_guest, addr >> PAGE_SHIFT));
 }
 
