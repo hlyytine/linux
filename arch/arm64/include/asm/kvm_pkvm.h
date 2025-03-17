@@ -18,7 +18,7 @@
 
 int pkvm_init_host_vm(struct kvm *kvm, unsigned long type);
 int pkvm_create_hyp_vm(struct kvm *kvm);
-void pkvm_destroy_hyp_vm(struct kvm *kvm);
+void pkvm_finalize_destroy_hyp_vm(struct kvm *kvm);
 int pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu);
 bool pkvm_is_hyp_created(struct kvm *kvm);
 
