@@ -1766,6 +1766,7 @@ void check_feature_map(void);
 
 unsigned long __pkvm_reclaim_hyp_alloc_mgt(unsigned long nr_pages);
 struct kvm_iommu_ops;
-int kvm_iommu_register_driver(struct kvm_iommu_ops *hyp_ops);
+int kvm_iommu_register_driver(struct kvm_iommu_ops *hyp_ops, size_t pool_pages);
+size_t kvm_iommu_pages(void);
 
 #endif /* __ARM64_KVM_HOST_H__ */
