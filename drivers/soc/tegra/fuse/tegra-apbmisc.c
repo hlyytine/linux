@@ -28,7 +28,7 @@
 static void __iomem *apbmisc_base;
 static bool long_ram_code;
 static u32 strapping;
-static u32 chipid;
+static u32 chipid = 0x00012347;
 
 u32 tegra_read_chipid(void)
 {
