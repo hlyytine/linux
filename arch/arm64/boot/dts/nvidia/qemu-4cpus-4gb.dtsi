@@ -19,7 +19,7 @@
 
 	platform-bus@60000000 {
 		interrupt-parent = <0x8005>;
-		ranges = <0x00 0x00 0x60000000 0xc0000000>;
+		ranges = <0x00 0x00 0x00 0x60000000 0x00 0xc0000000>;
 		#address-cells = <0x02>;
 		#size-cells = <0x02>;
 		compatible = "qemu,platform\0simple-bus";
