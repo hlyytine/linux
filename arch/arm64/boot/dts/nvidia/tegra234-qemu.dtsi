@@ -1,0 +1,22 @@
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/mailbox/tegra186-hsp.h>
+#include <dt-bindings/memory/tegra234-mc.h>
+#include <dt-bindings/pinctrl/pinctrl-tegra-io-pad.h>
+#include <dt-bindings/power/tegra234-powergate.h>
+#include <dt-bindings/reset/tegra234-reset.h>
+#include <dt-bindings/thermal/tegra234-bpmp-thermal.h>
+
+/ {
+	compatible = "nvidia,tegra234";
+
+	bpmp: bpmp {
+		compatible = "nvidia,tegra234-bpmp", "nvidia,tegra186-bpmp";
+		virtual-pa = <0x0 0x090c0000>;
+		#clock-cells = <1>;
+		#reset-cells = <1>;
+		#power-domain-cells = <1>;
+		status = "okay";
+	};
+};
