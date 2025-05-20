@@ -1,0 +1,2 @@
+#include "qemu-4cpus-4gb.dtsi"
+#include "tegra234-qemu.dtsi"
