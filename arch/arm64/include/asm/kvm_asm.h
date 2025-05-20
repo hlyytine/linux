@@ -113,7 +113,8 @@ enum __kvm_host_smccc_func {
 	__KVM_HOST_SMCCC_FUNC___pkvm_hyp_alloc_mgt_reclaimable,
 	__KVM_HOST_SMCCC_FUNC___pkvm_hyp_alloc_mgt_reclaim,
 	__KVM_HOST_SMCCC_FUNC___pkvm_ptdump,
-
+	__KVM_HOST_SMCCC_FUNC___pkvm_iommu_enable_dev,
+	__KVM_HOST_SMCCC_FUNC___pkvm_iommu_disable_dev,
 	/*
 	 * Start of the dynamically registered hypercalls. Start a bit
 	 * further, just in case some modules...

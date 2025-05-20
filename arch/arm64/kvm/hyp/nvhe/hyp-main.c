@@ -20,6 +20,7 @@
 #include <nvhe/alloc.h>
 #include <nvhe/alloc_mgt.h>
 #include <nvhe/ffa.h>
+#include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/modules.h>
 #include <nvhe/mm.h>
@@ -1642,6 +1643,22 @@ static void handle___pkvm_ptdump(struct kvm_cpu_context *host_ctxt)
 		cpu_reg(host_ctxt, 0) = SMCCC_RET_NOT_SUPPORTED;
 }
 
+static void handle___pkvm_iommu_enable_dev(struct kvm_cpu_context *host_ctxt)
+{
+	DECLARE_REG(pkvm_handle_t, iommu, host_ctxt, 1);
+	DECLARE_REG(pkvm_handle_t, dev, host_ctxt, 2);
+
+	cpu_reg(host_ctxt, 1) = kvm_iommu_enable_dev(iommu, dev);
+}
+
+static void handle___pkvm_iommu_disable_dev(struct kvm_cpu_context *host_ctxt)
+{
+	DECLARE_REG(pkvm_handle_t, iommu, host_ctxt, 1);
+	DECLARE_REG(pkvm_handle_t, dev, host_ctxt, 2);
+
+	cpu_reg(host_ctxt, 1) = kvm_iommu_disable_dev(iommu, dev);
+}
+
 typedef void (*hcall_t)(struct kvm_cpu_context *);
 
 #define HANDLE_FUNC(x)	[__KVM_HOST_SMCCC_FUNC_##x] = (hcall_t)handle_##x
@@ -1705,6 +1722,8 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__pkvm_hyp_alloc_mgt_reclaimable),
 	HANDLE_FUNC(__pkvm_hyp_alloc_mgt_reclaim),
 	HANDLE_FUNC(__pkvm_ptdump),
+	HANDLE_FUNC(__pkvm_iommu_enable_dev),
+	HANDLE_FUNC(__pkvm_iommu_disable_dev),
 };
 
 static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
