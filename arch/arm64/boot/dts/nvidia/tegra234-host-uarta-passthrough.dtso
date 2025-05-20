@@ -1,0 +1,44 @@
+/*
+ * Copyright 2022-2024 TII (SSRC) and the Ghaf contributors
+ * SPDX-License-Identifier: CC-BY-SA-4.0
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/reset/tegra234-reset.h>
+#include <dt-bindings/power/tegra234-powergate.h>
+#include <dt-bindings/memory/tegra234-mc.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+
+/{
+	overlay-name = "UARTA passthrough on host";
+	compatible = "nvidia,tegra234";
+
+	fragment@0 {
+		target = <&uarta>;
+		__overlay__ {
+			compatible = "nvidia,dummy";
+			iommus = <&smmu_niso0 TEGRA234_SID_PASSTHROUGH>;
+			dma-coherent;
+			status = "okay";
+		};
+	};
+
+	fragment@1 {
+		target-path = "/bpmp_host_proxy";
+		__overlay__ {
+			uarta {
+				allowed-clocks =
+					<TEGRA234_CLK_UARTA>,
+					<TEGRA234_CLK_PLLP_OUT0>,
+					<TEGRA234_CLK_CLK_32K>,
+					<TEGRA234_CLK_CLK_M>;
+				allowed-resets = <TEGRA234_RESET_UARTA>;
+			};
+		};
+	};
+};
