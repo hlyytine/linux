@@ -1,5 +1,8 @@
 # add your passthrough devices here
 
+# UART A
+PASSTHROUGH_DEVICES="${PASSTHROUGH_DEVICES} 3100000.serial"
+
 # DO NOT add any passthrough devices after this line,
 # or delicate address mapping in QEMU will get messed up
 
