@@ -13,6 +13,7 @@ DTC_FLAGS_tegra234-p3740-0002+p3701-0008 := -@
 DTC_FLAGS_tegra234-p3768-0000+p3767-0000 := -@
 DTC_FLAGS_tegra234-p3768-0000+p3767-0005 := -@
 DTC_FLAGS_tegra234-host-bpmp-proxy := -@
+DTC_FLAGS_tegra234-host-uarta-passthrough := -@
 
 dtb-$(CONFIG_ARCH_TEGRA_132_SOC) += tegra132-norrin.dtb
 dtb-$(CONFIG_ARCH_TEGRA_210_SOC) += tegra210-p2371-0000.dtb
@@ -32,3 +33,4 @@ dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3740-0002+p3701-0008.dtb
 dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0000.dtb
 dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-p3768-0000+p3767-0005.dtb
 dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-host-bpmp-proxy.dtbo
+dtb-$(CONFIG_ARCH_TEGRA_234_SOC) += tegra234-host-uarta-passthrough.dtbo
