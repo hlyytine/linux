@@ -1,0 +1,29 @@
+/*
+ * Copyright 2022-2025 TII (SSRC) and the Ghaf contributors
+ * SPDX-License-Identifier: CC-BY-SA-4.0
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/reset/tegra234-reset.h>
+#include <dt-bindings/power/tegra234-powergate.h>
+#include <dt-bindings/memory/tegra234-mc.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+	overlay-name = "BPMP host proxy";
+	compatible = "nvidia,tegra234";
+
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			bpmp_host_proxy: bpmp_host_proxy {
+				compatible = "nvidia,bpmp-host-proxy";
+				status = "okay";
+			};
+		};
+	};
+};
