@@ -33,6 +33,11 @@ struct tegra186_bpmp {
 	} mbox;
 };
 
+#ifdef CONFIG_TEGRA_BPMP_GUEST_PROXY
+extern uint64_t bpmp_vpa;
+int tegra_bpmp_guest_init(void);
+#endif
+
 static inline struct tegra_bpmp *
 mbox_client_to_bpmp(struct mbox_client *client)
 {
@@ -331,6 +336,16 @@ static int tegra186_bpmp_init(struct tegra_bpmp *bpmp)
 	if (!priv)
 		return -ENOMEM;
 
+#ifdef CONFIG_TEGRA_BPMP_GUEST_PROXY
+	// If virtual-pa node is defined, it means that we are using a virtual BPMP
+	// then we have to initialize the bpmp-guest
+	err = of_property_read_u64(bpmp->dev->of_node, "virtual-pa", &bpmp_vpa);
+	if(!err){
+		printk("BPMP virtual-pa: 0x%llX", bpmp_vpa);
+		return tegra_bpmp_guest_init();
+	}
+#endif
+
 	priv->parent = bpmp;
 	bpmp->priv = priv;
 
@@ -360,6 +375,13 @@ static int tegra186_bpmp_init(struct tegra_bpmp *bpmp)
 static void tegra186_bpmp_deinit(struct tegra_bpmp *bpmp)
 {
 	struct tegra186_bpmp *priv = bpmp->priv;
+
+#ifdef CONFIG_TEGRA_BPMP_GUEST_PROXY
+	// If using BPMP guest proxy, do no deinit the module
+	if(bpmp_vpa){
+		return;
+	}
+#endif
 
 	mbox_free_channel(priv->mbox.channel);
 
