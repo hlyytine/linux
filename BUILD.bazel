@@ -1500,6 +1500,22 @@ ddk_headers(
     visibility = ["//visibility:private"],
 )
 
+# Headers for building pKVM modules. They are for pKVM only so not added to
+# all_headers_aarch64.
+ddk_headers(
+    name = "pkvm_headers_aarch64",
+    hdrs = [
+        "arch/arm64/kvm/hyp/include/module/nvhe/define_events.h",
+        "arch/arm64/kvm/hyp/include/module/nvhe/trace.h",
+    ],
+    includes = [
+        # LINT.IfChange(pkvm_includes)
+        "arch/arm64/kvm/hyp/include/module",
+        # LINT.ThenChange(/arch/arm64/kvm/hyp/nvhe/Makefile.module:includes)
+    ],
+    visibility = ["//visibility:private"],
+)
+
 # DDK headers allowlist. This is the list of all headers and include
 # directories that are safe to use in DDK modules.
 ddk_headers(
@@ -1513,7 +1529,6 @@ ddk_headers(
         "sound/usb/usbaudio.h",
         ":all_headers_allowlist_aarch64_globs",
         ":all_headers_allowlist_common_globs",
-        ":xhci_headers",
     ],
     # The list of include directories where source files can #include headers
     # from. In other words, these are the `-I` option to the C compiler.
