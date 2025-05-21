@@ -1,3 +1,7 @@
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/reset/tegra234-reset.h>
+
 /dts-v1/;
 
 / {
@@ -19,10 +23,22 @@
 
 	platform-bus@60000000 {
 		interrupt-parent = <0x8005>;
-		ranges = <0x00 0x00 0x00 0x60000000 0x00 0xc0000000>;
+		ranges = <0x00 0x03100000 0x00 0x60000000 0x00 0x10000>;
 		#address-cells = <0x02>;
 		#size-cells = <0x02>;
 		compatible = "qemu,platform\0simple-bus";
+
+		uarta: serial@3100000 {
+			/* compatible = "nvidia,tegra234-uart", "nvidia,tegra20-uart" */
+			reg = <0x0 0x03100000 0x0 0x10000>;
+			interrupts = <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&bpmp TEGRA234_CLK_UARTA>;
+			resets = <&bpmp TEGRA234_RESET_UARTA>;
+			/* status = "disabled"; */
+			compatible = "nvidia,tegra194-hsuart";
+			reset-names = "serial";
+			status = "okay";
+		};
 	};
 
 	fw-cfg@9020000 {
@@ -193,6 +209,7 @@
 
 	aliases {
 		serial0 = "/pl011@9000000";
+		serial1 = &uarta;
 	};
 
 	chosen {
