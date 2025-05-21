@@ -1,0 +1,12 @@
+[Unit]
+Description=Set 115200 baud on /dev/ttyTHS1
+Before=serial-getty@ttyTHS1.service
+Requires=dev-ttyTHS1.device
+After=dev-ttyTHS1.device
+
+[Service]
+Type=oneshot
+ExecStart=/bin/stty -F /dev/ttyTHS1 115200
+
+[Install]
+WantedBy=serial-getty@ttyTHS1.service
