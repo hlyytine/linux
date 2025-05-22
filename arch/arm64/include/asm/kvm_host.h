@@ -840,6 +840,7 @@ struct kvm_hyp_req {
 #define KVM_HYP_LAST_REQ	0
 #define KVM_HYP_REQ_TYPE_MEM	1
 #define KVM_HYP_REQ_TYPE_MAP	2
+#define KVM_HYP_REQ_TYPE_SPLIT	3
 	u8 type;
 	union {
 		struct {
@@ -854,6 +855,10 @@ struct kvm_hyp_req {
 			unsigned long	guest_ipa;
 			size_t		size;
 		} map;
+		struct {
+			unsigned long	guest_ipa;
+			size_t		size;
+		} split;
 	};
 };
 
