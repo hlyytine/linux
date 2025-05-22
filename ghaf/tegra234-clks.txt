@@ -1,0 +1,1955 @@
+ 001: actmon
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 002: adsp
+   flags: 0 fixed
+   parents: 1
+     021
+ 003: adspneon
+   flags: 0 fixed
+   parents: 1
+     002
+ 004: ahub
+   flags: 3 (mux)
+   parents: 4
+     104
+     286
+     102
+     014
+ 005: apb2ape
+   flags: 0 fixed
+   parents: 1
+     008
+ 006: ape
+   flags: 3 (mux)
+   parents: 4
+     104
+     286
+     102
+     014
+ 007: aud_mclk
+   flags: 3 (mux)
+   parents: 5
+     102
+     104
+     286
+     289
+     014
+ 008: axi_cbb
+   flags: 0 fixed
+   parents: 1
+     315
+ 009: can1
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 010: can1_host
+   flags: 0 fixed
+   parents: 1
+     009
+ 011: can2
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 012: can2_host
+   flags: 0 fixed
+   parents: 1
+     011
+ 014: clk_m
+   flags: 4 (fixed, root)
+   parents: 0
+ 015: dmic1
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     139
+     102
+     014
+ 016: dmic2
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     140
+     102
+     014
+ 017: dmic3
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     141
+     102
+     014
+ 018: dmic4
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     142
+     102
+     014
+ 019: dpaux
+   flags: 0 fixed
+   parents: 1
+     131
+ 020: nvjpg1
+   flags: 3 (mux)
+   parents: 2
+     210
+     014
+ 021: aclk
+   flags: 3 (mux)
+   parents: 2
+     028
+     014
+ 022: mss_encrypt
+   flags: 3 (mux)
+   parents: 4
+     289
+     091
+     314
+     102
+ 023: eqos_rx_input
+   flags: 6 (root)
+   parents: 0
+ 025: aon_apb
+   flags: 0 fixed
+   parents: 1
+     102
+ 026: aon_nic
+   flags: 0 fixed
+   parents: 1
+     027
+ 027: aon_cpu_nic
+   flags: 0 fixed
+   parents: 1
+     102
+ 028: pll_a1
+   flags: 2 ()
+   parents: 1
+     091
+ 029: dspk1
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     143
+     102
+     014
+ 030: dspk2
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     144
+     102
+     014
+ 031: emc
+   flags: 6 (root)
+   parents: 0
+ 032: eqos_axi
+   flags: 2 ()
+   parents: 1
+     288
+ 033: eqos_ptp_ref
+   flags: 2 ()
+   parents: 1
+     288
+ 034: eqos_rx
+   flags: 0 fixed
+   parents: 1
+     023
+ 035: eqos_tx
+   flags: 0 fixed
+   parents: 1
+     415
+ 036: extperiph1
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 037: extperiph2
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 038: extperiph3
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 039: extperiph4
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 040: fuse
+   flags: 4 (fixed, root)
+   parents: 0
+ 041: gpc0clk
+   flags: 6 (root)
+   parents: 0
+ 042: gpu_pwr
+   flags: 4 (fixed, root)
+   parents: 0
+ 046: host1x
+   flags: 3 (mux)
+   parents: 2
+     102
+     014
+ 047: xusb_hs_hsicp
+   flags: 0 fixed
+   parents: 1
+     275
+ 048: i2c1
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 049: i2c2
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 050: i2c3
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 051: i2c4
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 052: i2c6
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 053: i2c7
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 054: i2c8
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 055: i2c9
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 056: i2s1
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     145
+     102
+     014
+ 057: i2s1_sync_input
+   flags: 6 (root)
+   parents: 0
+ 058: i2s2
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     146
+     102
+     014
+ 059: i2s2_sync_input
+   flags: 6 (root)
+   parents: 0
+ 060: i2s3
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     147
+     102
+     014
+ 061: i2s3_sync_input
+   flags: 6 (root)
+   parents: 0
+ 062: i2s4
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     148
+     102
+     014
+ 063: i2s4_sync_input
+   flags: 6 (root)
+   parents: 0
+ 064: i2s5
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     149
+     102
+     014
+ 065: i2s5_sync_input
+   flags: 6 (root)
+   parents: 0
+ 066: i2s6
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     150
+     102
+     014
+ 067: i2s6_sync_input
+   flags: 6 (root)
+   parents: 0
+ 069: isp
+   flags: 3 (mux)
+   parents: 2
+     206
+     014
+ 070: eqos_rx_m
+   flags: 0 fixed
+   parents: 1
+     034
+ 071: maud
+   flags: 3 (mux)
+   parents: 2
+     442
+     091
+ 072: mipi_cal
+   flags: 0 fixed
+   parents: 1
+     162
+ 073: mphy_core_pll_fixed
+   flags: 2 ()
+   parents: 1
+     288
+ 074: mphy_l0_rx_ana
+   flags: 6 (root)
+   parents: 0
+ 075: mphy_l0_rx_ls_bit
+   flags: 0 fixed
+   parents: 1
+     353
+ 076: mphy_l0_rx_symb
+   flags: 0 fixed
+   parents: 1
+     354
+ 077: mphy_l0_tx_ls_3xbit
+   flags: 0 fixed
+   parents: 1
+     348
+ 078: mphy_l0_tx_symb
+   flags: 0 fixed
+   parents: 1
+     344
+ 079: mphy_l1_rx_ana
+   flags: 6 (root)
+   parents: 0
+ 080: mphy_tx_1mhz_ref
+   flags: 2 ()
+   parents: 1
+     091
+ 081: nvcsi
+   flags: 3 (mux)
+   parents: 3
+     102
+     294
+     014
+ 082: nvcsilp
+   flags: 3 (mux)
+   parents: 2
+     102
+     014
+ 083: nvdec
+   flags: 3 (mux)
+   parents: 2
+     199
+     014
+ 084: hub
+   flags: 3 (mux)
+   parents: 3
+     091
+     455
+     441
+ 085: disp
+   flags: 3 (mux)
+   parents: 3
+     091
+     454
+     440
+ 086: nvdisplay_p0
+   flags: 2 ()
+   parents: 1
+     449
+ 087: nvdisplay_p1
+   flags: 2 ()
+   parents: 1
+     450
+ 088: dsc
+   flags: 0 fixed
+   parents: 1
+     085
+ 089: nvenc
+   flags: 3 (mux)
+   parents: 2
+     205
+     014
+ 090: nvjpg
+   flags: 3 (mux)
+   parents: 2
+     200
+     014
+ 091: osc
+   flags: 4 (fixed, root)
+   parents: 0
+ 092: aon_touch
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 093: pll_a
+   flags: 2 ()
+   parents: 1
+     091
+ 094: pll_aon
+   flags: 2 ()
+   parents: 1
+     091
+ 100: pll_e
+   flags: 2 ()
+   parents: 1
+     091
+ 101: pll_p
+   flags: 4 (fixed, root)
+   parents: 0
+ 102: pllp_out0
+   flags: 4 (fixed, root)
+   parents: 0
+ 103: utmip_pll
+   flags: 0 fixed
+   parents: 1
+     091
+ 104: plla_out0
+   flags: 2 ()
+   parents: 1
+     093
+ 105: pwm1
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 106: pwm2
+   flags: 0 fixed
+   parents: 1
+     102
+ 107: pwm3
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 108: pwm4
+   flags: 0 fixed
+   parents: 1
+     102
+ 109: pwm5
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 110: pwm6
+   flags: 0 fixed
+   parents: 1
+     102
+ 111: pwm7
+   flags: 0 fixed
+   parents: 1
+     102
+ 112: pwm8
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 113: rce_cpu_nic
+   flags: 3 (mux)
+   parents: 2
+     214
+     014
+ 114: rce_nic
+   flags: 2 ()
+   parents: 1
+     113
+ 117: aon_i2c_slow
+   flags: 3 (mux)
+   parents: 4
+     289
+     091
+     094
+     314
+ 118: sce_cpu_nic
+   flags: 3 (mux)
+   parents: 2
+     198
+     014
+ 119: sce_nic
+   flags: 2 ()
+   parents: 1
+     118
+ 120: sdmmc1
+   flags: 3 (mux)
+   parents: 4
+     102
+     241
+     014
+     289
+ 121: uphy_pll3
+   flags: 2 ()
+   parents: 1
+     100
+ 123: sdmmc4
+   flags: 3 (mux)
+   parents: 3
+     102
+     237
+     014
+ 124: se
+   flags: 0 fixed
+   parents: 1
+     306
+ 125: sor0_pll_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     449
+     450
+ 126: sor0_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     128
+     091
+ 127: sor1_pll_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     449
+     450
+ 128: pre_sor0_ref
+   flags: 2 ()
+   parents: 1
+     125
+ 129: sor1_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     130
+     091
+ 130: pre_sor1_ref
+   flags: 2 ()
+   parents: 1
+     127
+ 131: sor_safe
+   flags: 0 fixed
+   parents: 1
+     328
+ 132: sor0_div
+   flags: 2 ()
+   parents: 1
+     125
+ 134: dmic5
+   flags: 3 (mux)
+   parents: 4
+     289
+     091
+     094
+     314
+ 135: spi1
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 136: spi2
+   flags: 3 (mux)
+   parents: 5
+     102
+     314
+     094
+     289
+     091
+ 137: spi3
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 138: i2c_slow
+   flags: 3 (mux)
+   parents: 2
+     289
+     014
+ 139: dmic1_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 140: dmic2_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 141: dmic3_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 142: dmic4_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 143: dspk1_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 144: dspk2_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 145: i2s1_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 146: i2s2_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 147: i2s3_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 148: i2s4_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 149: i2s5_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 150: i2s6_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 7
+     057
+     059
+     061
+     063
+     065
+     104
+     067
+ 151: mphy_flsm
+   flags: 0 fixed
+   parents: 1
+     091
+ 152: tach0
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 153: tsec
+   flags: 3 (mux)
+   parents: 2
+     201
+     014
+ 154: tsec_pka
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 155: uarta
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 156: uartb
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 157: uartc
+   flags: 3 (mux)
+   parents: 6
+     102
+     314
+     094
+     241
+     289
+     091
+ 158: uartd
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 159: uarte
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 160: uartf
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 161: pex1_c6_core
+   flags: 6 (root)
+   parents: 0
+ 162: uart_fst_mipi_cal
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 163: ufsdev_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     014
+     091
+ 164: ufshc
+   flags: 3 (mux)
+   parents: 3
+     014
+     102
+     288
+ 165: usb2_trk
+   flags: 2 ()
+   parents: 1
+     091
+ 166: vi
+   flags: 3 (mux)
+   parents: 2
+     203
+     014
+ 167: vic
+   flags: 3 (mux)
+   parents: 2
+     207
+     014
+ 168: csite
+   flags: 3 (mux)
+   parents: 6
+     102
+     314
+     327
+     289
+     014
+     241
+ 169: ist
+   flags: 3 (mux)
+   parents: 3
+     102
+     014
+     241
+ 171: pex2_c7_core
+   flags: 6 (root)
+   parents: 0
+ 172: pex2_c8_core
+   flags: 6 (root)
+   parents: 0
+ 173: pex2_c9_core
+   flags: 6 (root)
+   parents: 0
+ 174: dla0_falcon
+   flags: 3 (mux)
+   parents: 2
+     300
+     014
+ 175: dla0_core
+   flags: 3 (mux)
+   parents: 2
+     299
+     014
+ 176: dla1_falcon
+   flags: 3 (mux)
+   parents: 2
+     302
+     014
+ 177: dla1_core
+   flags: 3 (mux)
+   parents: 2
+     301
+     014
+ 178: sor0
+   flags: 1 (mux, fixed)
+   parents: 2
+     461
+     091
+ 179: sor1
+   flags: 1 (mux, fixed)
+   parents: 2
+     462
+     091
+ 180: sor_pad_input
+   flags: 6 (root)
+   parents: 0
+ 181: pre_sf0
+   flags: 1 (mux, fixed)
+   parents: 2
+     180
+     086
+ 182: sf0
+   flags: 1 (mux, fixed)
+   parents: 2
+     461
+     091
+ 183: sf1
+   flags: 1 (mux, fixed)
+   parents: 2
+     180
+     091
+ 184: dsi_pad_input
+   flags: 6 (root)
+   parents: 0
+ 187: pex2_c10_core
+   flags: 6 (root)
+   parents: 0
+ 188: uarti
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 189: uartj
+   flags: 3 (mux)
+   parents: 6
+     102
+     314
+     094
+     241
+     289
+     091
+ 190: uarth
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 191: fuse_serial
+   flags: 0 fixed
+   parents: 1
+     014
+ 192: qspi0_2x_pm
+   flags: 3 (mux)
+   parents: 4
+     102
+     314
+     241
+     014
+ 193: qspi1_2x_pm
+   flags: 3 (mux)
+   parents: 4
+     102
+     314
+     241
+     014
+ 194: qspi0_pm
+   flags: 2 ()
+   parents: 1
+     192
+ 195: qspi1_pm
+   flags: 2 ()
+   parents: 1
+     193
+ 196: vi_const
+   flags: 3 (mux)
+   parents: 2
+     102
+     014
+ 197: nafll_bpmp
+   flags: 2 ()
+   parents: 1
+     091
+ 198: nafll_sce
+   flags: 2 ()
+   parents: 1
+     091
+ 199: nafll_nvdec
+   flags: 2 ()
+   parents: 1
+     091
+ 200: nafll_nvjpg
+   flags: 2 ()
+   parents: 1
+     091
+ 201: nafll_tsec
+   flags: 2 ()
+   parents: 1
+     091
+ 203: nafll_vi
+   flags: 2 ()
+   parents: 1
+     091
+ 204: nafll_se
+   flags: 2 ()
+   parents: 1
+     091
+ 205: nafll_nvenc
+   flags: 2 ()
+   parents: 1
+     091
+ 206: nafll_isp
+   flags: 2 ()
+   parents: 1
+     091
+ 207: nafll_vic
+   flags: 2 ()
+   parents: 1
+     091
+ 210: nafll_nvjpg1
+   flags: 2 ()
+   parents: 1
+     091
+ 211: nafll_pva_core
+   flags: 2 ()
+   parents: 1
+     091
+ 212: nafll_pva_vps
+   flags: 2 ()
+   parents: 1
+     091
+ 213: dbgapb
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 214: nafll_rce
+   flags: 2 ()
+   parents: 1
+     091
+ 215: la
+   flags: 3 (mux)
+   parents: 5
+     102
+     327
+     289
+     014
+     241
+ 216: pllp_out_jtag
+   flags: 6 (root)
+   parents: 0
+ 217: sdmmc4_axicif
+   flags: 0 fixed
+   parents: 1
+     237
+ 219: sdmmc_legacy_tm
+   flags: 2 ()
+   parents: 1
+     102
+ 220: pex0_c0_core
+   flags: 6 (root)
+   parents: 0
+ 221: pex0_c1_core
+   flags: 6 (root)
+   parents: 0
+ 222: pex0_c2_core
+   flags: 6 (root)
+   parents: 0
+ 223: pex0_c3_core
+   flags: 6 (root)
+   parents: 0
+ 224: pex0_c4_core
+   flags: 6 (root)
+   parents: 0
+ 225: pex1_c5_core
+   flags: 6 (root)
+   parents: 0
+ 229: pex0_c0_core_m
+   flags: 0 fixed
+   parents: 1
+     220
+ 230: pex0_c1_core_m
+   flags: 0 fixed
+   parents: 1
+     221
+ 231: pex0_c2_core_m
+   flags: 0 fixed
+   parents: 1
+     222
+ 232: pex0_c3_core_m
+   flags: 0 fixed
+   parents: 1
+     223
+ 233: pex0_c4_core_m
+   flags: 0 fixed
+   parents: 1
+     224
+ 234: pex1_c5_core_m
+   flags: 0 fixed
+   parents: 1
+     225
+ 235: pex1_c6_core_m
+   flags: 0 fixed
+   parents: 1
+     161
+ 236: gpc1clk
+   flags: 6 (root)
+   parents: 0
+ 237: pll_c4
+   flags: 2 ()
+   parents: 1
+     091
+ 239: pllc4_out1
+   flags: 0 fixed
+   parents: 1
+     237
+ 240: pllc4_out2
+   flags: 0 fixed
+   parents: 1
+     237
+ 241: pllc4_muxed
+   flags: 1 (mux, fixed)
+   parents: 3
+     239
+     240
+     242
+ 242: pllc4_vco_div2
+   flags: 0 fixed
+   parents: 1
+     237
+ 243: pll_nvhs
+   flags: 0 fixed
+   parents: 1
+     091
+ 244: pex2_c7_core_m
+   flags: 0 fixed
+   parents: 1
+     171
+ 245: pex2_c8_core_m
+   flags: 0 fixed
+   parents: 1
+     172
+ 246: pex2_c9_core_m
+   flags: 0 fixed
+   parents: 1
+     173
+ 247: pex2_c10_core_m
+   flags: 0 fixed
+   parents: 1
+     187
+ 248: mgbe0_rx_input
+   flags: 6 (root)
+   parents: 0
+ 249: mgbe1_rx_input
+   flags: 6 (root)
+   parents: 0
+ 250: mgbe2_rx_input
+   flags: 6 (root)
+   parents: 0
+ 251: mgbe3_rx_input
+   flags: 6 (root)
+   parents: 0
+ 254: pex_sata_usb_rx_byp
+   flags: 2 ()
+   parents: 1
+     102
+ 255: pex_usb_pad_pll0_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 256: pex_usb_pad_pll1_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 257: pex_usb_pad_pll2_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 258: pex_usb_pad_pll3_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 263: nvhs_rx_byp_ref
+   flags: 2 ()
+   parents: 1
+     102
+ 264: nvhs_pll0_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 265: xusb_core_dev
+   flags: 3 (mux)
+   parents: 2
+     014
+     102
+ 266: xusb_core_mux
+   flags: 3 (mux)
+   parents: 2
+     014
+     102
+ 267: xusb_core_host
+   flags: 0 fixed
+   parents: 1
+     266
+ 268: xusb_core_ss
+   flags: 0 fixed
+   parents: 1
+     266
+ 269: xusb_falcon
+   flags: 3 (mux)
+   parents: 3
+     014
+     102
+     288
+ 270: xusb_falcon_host
+   flags: 0 fixed
+   parents: 1
+     269
+ 271: xusb_falcon_ss
+   flags: 0 fixed
+   parents: 1
+     269
+ 272: xusb_fs
+   flags: 3 (mux)
+   parents: 4
+     014
+     291
+     102
+     292
+ 273: xusb_fs_host
+   flags: 0 fixed
+   parents: 1
+     272
+ 274: xusb_fs_dev
+   flags: 0 fixed
+   parents: 1
+     272
+ 275: xusb_ss
+   flags: 3 (mux)
+   parents: 3
+     014
+     289
+     292
+ 276: xusb_ss_dev
+   flags: 0 fixed
+   parents: 1
+     275
+ 277: xusb_ss_superspeed
+   flags: 0 fixed
+   parents: 1
+     275
+ 280: nafll_cluster0_core
+   flags: 2 ()
+   parents: 1
+     091
+ 281: nafll_cluster1_core
+   flags: 2 ()
+   parents: 1
+     091
+ 282: nafll_cluster2_core
+   flags: 2 ()
+   parents: 1
+     091
+ 284: can1_core
+   flags: 2 ()
+   parents: 1
+     009
+ 285: can2_core
+   flags: 2 ()
+   parents: 1
+     011
+ 286: plla1_out1
+   flags: 2 ()
+   parents: 1
+     028
+ 287: pllnvhs_hps
+   flags: 0 fixed
+   parents: 1
+     243
+ 288: pllrefe_vcoout
+   flags: 4 (fixed, root)
+   parents: 0
+ 289: clk_32k
+   flags: 4 (fixed, root)
+   parents: 0
+ 291: utmipll_clkout48
+   flags: 0 fixed
+   parents: 1
+     103
+ 292: utmipll_clkout480
+   flags: 0 fixed
+   parents: 1
+     103
+ 294: pll_nvcsi
+   flags: 2 ()
+   parents: 1
+     091
+ 295: pva0_cpu_axi
+   flags: 3 (mux)
+   parents: 2
+     211
+     014
+ 297: pva0_vps
+   flags: 3 (mux)
+   parents: 2
+     212
+     014
+ 299: nafll_dla0_core
+   flags: 2 ()
+   parents: 1
+     091
+ 300: nafll_dla0_falcon
+   flags: 2 ()
+   parents: 1
+     091
+ 301: nafll_dla1_core
+   flags: 2 ()
+   parents: 1
+     091
+ 302: nafll_dla1_falcon
+   flags: 2 ()
+   parents: 1
+     091
+ 303: aon_uart_fst_mipi_cal
+   flags: 3 (mux)
+   parents: 4
+     289
+     091
+     314
+     102
+ 304: gpusysclk
+   flags: 6 (root)
+   parents: 0
+ 306: fr_se
+   flags: 3 (mux)
+   parents: 2
+     204
+     014
+ 314: pll_c
+   flags: 2 ()
+   parents: 1
+     091
+ 315: pll_c2
+   flags: 2 ()
+   parents: 1
+     091
+ 318: fuse_burn
+   flags: 4 (fixed, root)
+   parents: 0
+ 319: pll_gbe
+   flags: 0 fixed
+   parents: 1
+     091
+ 320: pllgbe_hps
+   flags: 0 fixed
+   parents: 1
+     319
+ 326: plle_hps
+   flags: 0 fixed
+   parents: 1
+     100
+ 327: pllrefe_vcoout_gated
+   flags: 0 fixed
+   parents: 1
+     288
+ 328: pllp_div17
+   flags: 4 (fixed, root)
+   parents: 0
+ 331: fr_seu1
+   flags: 3 (mux)
+   parents: 2
+     335
+     014
+ 333: nafll_ofa
+   flags: 2 ()
+   parents: 1
+     091
+ 334: ofa
+   flags: 3 (mux)
+   parents: 2
+     333
+     014
+ 335: nafll_seu1
+   flags: 2 ()
+   parents: 1
+     091
+ 336: seu1
+   flags: 0 fixed
+   parents: 1
+     331
+ 337: spi4
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 338: spi5
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 339: dce_cpu_nic
+   flags: 3 (mux)
+   parents: 2
+     341
+     014
+ 340: dce_nic
+   flags: 2 ()
+   parents: 1
+     339
+ 341: nafll_dce
+   flags: 2 ()
+   parents: 1
+     091
+ 342: mphy_l0_rx_ana_m
+   flags: 0 fixed
+   parents: 1
+     074
+ 343: mphy_l1_rx_ana_m
+   flags: 0 fixed
+   parents: 1
+     079
+ 344: mphy_l0_tx_pre_symb
+   flags: 2 ()
+   parents: 1
+     349
+ 345: mphy_l0_tx_ls_symb_div
+   flags: 2 ()
+   parents: 1
+     348
+ 346: mphy_l0_tx_2x_symb
+   flags: 0 fixed
+   parents: 1
+     349
+ 347: mphy_l0_tx_hs_symb_div
+   flags: 2 ()
+   parents: 1
+     121
+ 348: mphy_l0_tx_ls_3xbit_div
+   flags: 2 ()
+   parents: 1
+     288
+ 349: mphy_l0_tx_mux_symb_div
+   flags: 1 (mux, fixed)
+   parents: 2
+     345
+     347
+ 350: mphy_l0_tx_symb_m
+   flags: 0 fixed
+   parents: 1
+     078
+ 351: mphy_l0_rx_ls_symb_div
+   flags: 2 ()
+   parents: 1
+     353
+ 352: mphy_l0_rx_hs_symb_div
+   flags: 2 ()
+   parents: 1
+     288
+ 353: mphy_l0_rx_ls_bit_div
+   flags: 2 ()
+   parents: 1
+     288
+ 354: mphy_l0_rx_mux_symb_div
+   flags: 1 (mux, fixed)
+   parents: 2
+     351
+     352
+ 355: mphy_l0_rx_symb_m
+   flags: 0 fixed
+   parents: 1
+     076
+ 357: mgbe0_rx_input_m
+   flags: 0 fixed
+   parents: 1
+     248
+ 358: mgbe1_rx_input_m
+   flags: 0 fixed
+   parents: 1
+     249
+ 359: mgbe2_rx_input_m
+   flags: 0 fixed
+   parents: 1
+     250
+ 360: mgbe3_rx_input_m
+   flags: 0 fixed
+   parents: 1
+     251
+ 361: mgbe0_rx_pcs_m
+   flags: 0 fixed
+   parents: 1
+     373
+ 362: mgbe1_rx_pcs_m
+   flags: 0 fixed
+   parents: 1
+     382
+ 363: mgbe2_rx_pcs_m
+   flags: 0 fixed
+   parents: 1
+     391
+ 364: mgbe3_rx_pcs_m
+   flags: 0 fixed
+   parents: 1
+     400
+ 365: tach1
+   flags: 3 (mux)
+   parents: 3
+     102
+     289
+     014
+ 366: mgbes_app
+   flags: 3 (mux)
+   parents: 3
+     102
+     014
+     292
+ 367: uphy_gbe_pll2_tx_ref
+   flags: 2 ()
+   parents: 1
+     319
+ 368: uphy_gbe_pll2_xdig
+   flags: 2 ()
+   parents: 1
+     319
+ 369: mgbe0_rx_pcs_input
+   flags: 6 (root)
+   parents: 0
+ 370: mgbe1_rx_pcs_input
+   flags: 6 (root)
+   parents: 0
+ 371: mgbe2_rx_pcs_input
+   flags: 6 (root)
+   parents: 0
+ 372: mgbe3_rx_pcs_input
+   flags: 6 (root)
+   parents: 0
+ 373: mgbe0_rx_pcs
+   flags: 1 (mux, fixed)
+   parents: 2
+     369
+     375
+ 374: mgbe0_tx
+   flags: 2 ()
+   parents: 1
+     367
+ 375: mgbe0_tx_pcs
+   flags: 2 ()
+   parents: 1
+     368
+ 376: mgbe0_mac_divider
+   flags: 2 ()
+   parents: 1
+     368
+ 377: mgbe0_mac
+   flags: 0 fixed
+   parents: 1
+     376
+ 378: mgbe0_macsec
+   flags: 0 fixed
+   parents: 1
+     376
+ 379: mgbe0_eee_pcs
+   flags: 4 (fixed, root)
+   parents: 0
+ 380: mgbe0_app
+   flags: 0 fixed
+   parents: 1
+     366
+ 381: mgbe0_ptp_ref
+   flags: 2 ()
+   parents: 1
+     288
+ 382: mgbe1_rx_pcs
+   flags: 1 (mux, fixed)
+   parents: 2
+     370
+     384
+ 383: mgbe1_tx
+   flags: 2 ()
+   parents: 1
+     367
+ 384: mgbe1_tx_pcs
+   flags: 2 ()
+   parents: 1
+     368
+ 385: mgbe1_mac_divider
+   flags: 2 ()
+   parents: 1
+     368
+ 386: mgbe1_mac
+   flags: 0 fixed
+   parents: 1
+     385
+ 387: mgbe1_macsec
+   flags: 0 fixed
+   parents: 1
+     385
+ 388: mgbe1_eee_pcs
+   flags: 4 (fixed, root)
+   parents: 0
+ 389: mgbe1_app
+   flags: 0 fixed
+   parents: 1
+     366
+ 390: mgbe1_ptp_ref
+   flags: 2 ()
+   parents: 1
+     288
+ 391: mgbe2_rx_pcs
+   flags: 1 (mux, fixed)
+   parents: 2
+     371
+     393
+ 392: mgbe2_tx
+   flags: 2 ()
+   parents: 1
+     367
+ 393: mgbe2_tx_pcs
+   flags: 2 ()
+   parents: 1
+     368
+ 394: mgbe2_mac_divider
+   flags: 2 ()
+   parents: 1
+     368
+ 395: mgbe2_mac
+   flags: 0 fixed
+   parents: 1
+     394
+ 396: mgbe2_macsec
+   flags: 0 fixed
+   parents: 1
+     394
+ 397: mgbe2_eee_pcs
+   flags: 4 (fixed, root)
+   parents: 0
+ 398: mgbe2_app
+   flags: 0 fixed
+   parents: 1
+     366
+ 399: mgbe2_ptp_ref
+   flags: 2 ()
+   parents: 1
+     288
+ 400: mgbe3_rx_pcs
+   flags: 1 (mux, fixed)
+   parents: 2
+     372
+     402
+ 401: mgbe3_tx
+   flags: 2 ()
+   parents: 1
+     367
+ 402: mgbe3_tx_pcs
+   flags: 2 ()
+   parents: 1
+     368
+ 403: mgbe3_mac_divider
+   flags: 2 ()
+   parents: 1
+     368
+ 404: mgbe3_mac
+   flags: 0 fixed
+   parents: 1
+     403
+ 405: mgbe3_macsec
+   flags: 0 fixed
+   parents: 1
+     403
+ 406: mgbe3_eee_pcs
+   flags: 4 (fixed, root)
+   parents: 0
+ 407: mgbe3_app
+   flags: 0 fixed
+   parents: 1
+     366
+ 408: mgbe3_ptp_ref
+   flags: 2 ()
+   parents: 1
+     288
+ 409: gbe_rx_byp_ref
+   flags: 2 ()
+   parents: 1
+     102
+ 410: gbe_pll0_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 411: gbe_pll1_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 412: gbe_pll2_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 413: eqos_macsec_rx
+   flags: 0 fixed
+   parents: 1
+     023
+ 414: eqos_macsec_tx
+   flags: 0 fixed
+   parents: 1
+     415
+ 415: eqos_tx_divider
+   flags: 2 ()
+   parents: 1
+     288
+ 416: nvhs_pll1_mgmt
+   flags: 0 fixed
+   parents: 1
+     102
+ 417: emchub
+   flags: 4 (fixed, root)
+   parents: 0
+ 418: i2s7_sync_input
+   flags: 6 (root)
+   parents: 0
+ 419: i2s7_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 3
+     418
+     422
+     104
+ 420: i2s7
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     419
+     102
+     014
+ 421: i2s7_pad_m
+   flags: 1 (mux, fixed)
+   parents: 2
+     418
+     420
+ 422: i2s8_sync_input
+   flags: 6 (root)
+   parents: 0
+ 423: i2s8_sync_clk
+   flags: 1 (mux, fixed)
+   parents: 3
+     418
+     422
+     104
+ 424: i2s8
+   flags: 3 (mux)
+   parents: 5
+     104
+     286
+     423
+     102
+     014
+ 425: i2s8_pad_m
+   flags: 1 (mux, fixed)
+   parents: 2
+     422
+     424
+ 426: nafll_gpc0
+   flags: 2 ()
+   parents: 1
+     042
+ 427: nafll_gpc1
+   flags: 2 ()
+   parents: 1
+     042
+ 428: nafll_gpusys
+   flags: 2 ()
+   parents: 1
+     042
+ 429: nafll_cluster0_dsu
+   flags: 2 ()
+   parents: 1
+     091
+ 430: nafll_cluster1_dsu
+   flags: 2 ()
+   parents: 1
+     091
+ 431: nafll_cluster2_dsu
+   flags: 2 ()
+   parents: 1
+     091
+ 432: sce_cpu
+   flags: 0 fixed
+   parents: 1
+     118
+ 433: rce_cpu
+   flags: 0 fixed
+   parents: 1
+     113
+ 434: dce_cpu
+   flags: 0 fixed
+   parents: 1
+     339
+ 435: dsipll_vco
+   flags: 2 ()
+   parents: 1
+     091
+ 436: dsipll_clkoutpn
+   flags: 2 ()
+   parents: 1
+     435
+ 437: dsipll_clkouta
+   flags: 2 ()
+   parents: 1
+     435
+ 438: sppll0_vco
+   flags: 2 ()
+   parents: 1
+     091
+ 439: sppll0_clkoutpn
+   flags: 2 ()
+   parents: 1
+     438
+ 440: sppll0_clkouta
+   flags: 2 ()
+   parents: 1
+     438
+ 441: sppll0_clkoutb
+   flags: 2 ()
+   parents: 1
+     438
+ 442: sppll0_div10
+   flags: 0 fixed
+   parents: 1
+     438
+ 443: sppll0_div25
+   flags: 0 fixed
+   parents: 1
+     438
+ 444: sppll0_div27pn
+   flags: 0 fixed
+   parents: 1
+     438
+ 445: sppll1_vco
+   flags: 2 ()
+   parents: 1
+     091
+ 446: sppll1_clkoutpn
+   flags: 2 ()
+   parents: 1
+     445
+ 447: sppll1_div27pn
+   flags: 0 fixed
+   parents: 1
+     445
+ 448: vpll0_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     091
+     437
+ 449: vpll0
+   flags: 2 ()
+   parents: 1
+     448
+ 450: vpll1
+   flags: 2 ()
+   parents: 1
+     091
+ 451: nvdisplay_p0_ref
+   flags: 1 (mux, fixed)
+   parents: 2
+     449
+     437
+ 452: rg0
+   flags: 1 (mux, fixed)
+   parents: 2
+     086
+     091
+ 453: rg1
+   flags: 1 (mux, fixed)
+   parents: 2
+     087
+     091
+ 454: disppll
+   flags: 2 ()
+   parents: 1
+     091
+ 455: disphubpll
+   flags: 2 ()
+   parents: 1
+     091
+ 456: dsi_lp
+   flags: 3 (mux)
+   parents: 4
+     091
+     102
+     289
+     014
+ 457: aza_2xbit
+   flags: 3 (mux)
+   parents: 2
+     443
+     091
+ 458: aza_bit
+   flags: 0 fixed
+   parents: 1
+     457
+ 459: dsi_core
+   flags: 1 (mux, fixed)
+   parents: 2
+     091
+     184
+ 460: dsi_pixel
+   flags: 1 (mux, fixed)
+   parents: 2
+     182
+     184
+ 461: pre_sor0
+   flags: 1 (mux, fixed)
+   parents: 2
+     132
+     180
+ 462: pre_sor1
+   flags: 0 fixed
+   parents: 1
+     180
+ 463: dp_link_ref
+   flags: 1 (mux, fixed)
+   parents: 4
+     439
+     444
+     446
+     447
+ 464: sor_linka_input
+   flags: 6 (root)
+   parents: 0
+ 465: sor_linka_afifo
+   flags: 1 (mux, fixed)
+   parents: 2
+     091
+     464
+ 466: sor_linka_afifo_m
+   flags: 0 fixed
+   parents: 1
+     465
+ 467: rg0_m
+   flags: 0 fixed
+   parents: 1
+     452
+ 468: rg1_m
+   flags: 0 fixed
+   parents: 1
+     453
+ 469: sor0_m
+   flags: 0 fixed
+   parents: 1
+     178
+ 470: sor1_m
+   flags: 0 fixed
+   parents: 1
+     179
+ 471: pll_hub
+   flags: 0 fixed
+   parents: 1
+     091
+ 472: mchub
+   flags: 0 fixed
+   parents: 1
+     417
