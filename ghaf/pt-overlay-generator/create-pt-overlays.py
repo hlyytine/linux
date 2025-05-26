@@ -7,17 +7,18 @@ import FdtHelper
 
 from HostOverlay import HostOverlay
 from GuestOverlay import GuestOverlay
+from QEMUOverlay import QEMUOverlay
 
 #path_prefix = "../arch/arm64/boot/dts/nvidia/"
 #dtb_path = path_prefix + "tegra234-p3737-0000+p3701-0000.dtb"
 
 dtb_path = "tegra234-p3737-0000+p3701-0000-nv.dtb"
-
-
 dtb_filename = PurePosixPath(dtb_path)
 stem = dtb_filename.stem
 host_dtso_filename = dtb_filename.with_name(f"{stem}-host").with_suffix(".dtso")
 guest_dtso_filename = dtb_filename.with_name(f"{stem}-guest").with_suffix(".dtso")
+
+qemu_dtb_path = "qemu.dtb"
 
 host_overlay = HostOverlay(dtb_path, host_dtso_filename)
 
@@ -43,6 +44,11 @@ host_overlay.generate_fragment_for_nodes('/', [bpmp_host_proxy_node])
 host_overlay.generate_footer()
 
 guest_overlay = GuestOverlay(dtb_path, guest_dtso_filename)
+
+qemu_overlay = QEMUOverlay(qemu_dtb_path, guest_overlay)
+for node in list(qemu_overlay.root):
+    node.finalize_node(qemu_overlay)
+
 allNodes = list(guest_overlay.root)
 passthroughNodes = [node for node in allNodes if node.name in passthroughNodeNames]
 
@@ -54,4 +60,5 @@ for node in passthroughNodes:
 
 guest_overlay.generate_header()
 guest_overlay.generate_fragment_for_nodes('/bus@0', passthroughNodes)
+guest_overlay.generate_fragment_for_nodes('/', guest_overlay.nodes_to_create)
 guest_overlay.generate_footer()

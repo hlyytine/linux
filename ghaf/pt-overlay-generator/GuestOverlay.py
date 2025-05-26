@@ -10,6 +10,8 @@ class GuestOverlay(Overlay):
     def __init__(self, dtb_path, output_filename):
         super().__init__(dtb_path, "Guest overlay", output_filename)
 
+        self.nodes_to_output = []
+
     def handleProperty(self, prop):
         if prop.name == 'status':
             return FdtHelper.Property('status', 'okay')
