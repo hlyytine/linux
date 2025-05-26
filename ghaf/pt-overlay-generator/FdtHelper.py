@@ -131,19 +131,19 @@ class Node(object):
         for child in self.children:
             yield from child
 
-def full_nodename(fdt, offset):
-    name = fdt.get_name(offset)
-    try:
-        parent_offset = fdt.parent_offset(offset)
-        return full_nodename(fdt, parent_offset) + '/' + name
-
-    except libfdt.FdtException as e:
-        if e.err == -libfdt.FDT_ERR_NOTFOUND:
-            return ''
-        # TODO: add raise here
-
-def full_parentname(fdt, offset):
-    return str(PurePosixPath(full_nodename(fdt, offset)).parent)
+#def full_nodename(fdt, offset):
+#    name = fdt.get_name(offset)
+#    try:
+#        parent_offset = fdt.parent_offset(offset)
+#        return full_nodename(fdt, parent_offset) + '/' + name
+#
+#    except libfdt.FdtException as e:
+#        if e.err == -libfdt.FDT_ERR_NOTFOUND:
+#            return ''
+#        # TODO: add raise here
+#
+#def full_parentname(fdt, offset):
+#    return str(PurePosixPath(full_nodename(fdt, offset)).parent)
 
 def find_node_by_name(fdt, name, offset=0):
     offset = fdt.first_subnode(offset)
@@ -161,10 +161,12 @@ def find_node_by_name(fdt, name, offset=0):
     return None
 
 class FdtNode(Node):
-    def __init__(self, fdt, offset):
+    def __init__(self, fdt, offset, parent_fullpath=None):
         super().__init__(fdt.get_name(offset))
         self.fdt = fdt
         self.offset = offset
+
+        self.parent_fullpath = parent_fullpath
 
         prop_offset = self.fdt.first_property_offset(self.offset, libfdt.QUIET_NOTFOUND)
         while prop_offset >= 0:
@@ -172,8 +174,13 @@ class FdtNode(Node):
             self.props[prop.name] = Property(prop.name, prop)
             prop_offset = self.fdt.next_property_offset(prop_offset, libfdt.QUIET_NOTFOUND)
 
+        if parent_fullpath:
+            parent_fullpath = parent_fullpath + '/' + self.name
+        else:
+            parent_fullpath = '/'
+
         subnode_offset = fdt.first_subnode(self.offset, libfdt.QUIET_NOTFOUND)
         while subnode_offset >= 0:
-            child = FdtNode(self.fdt, subnode_offset)
+            child = FdtNode(self.fdt, subnode_offset, parent_fullpath)
             self.children.append(child)
             subnode_offset = self.fdt.next_subnode(subnode_offset, libfdt.QUIET_NOTFOUND)
