@@ -916,12 +916,16 @@ static int __do_ffa_mem_xfer(const u64 func_id,
 
 		if (res->a3 != fraglen)
 			goto err_unshare;
-	} else if (res->a0 != FFA_SUCCESS) {
+
+		ffa_handle = PACK_HANDLE(res->a1, res->a2);
+	} else if (res->a0 == FFA_SUCCESS) {
+		ffa_handle = PACK_HANDLE(res->a2, res->a3);
+	} else {
 		goto err_unshare;
 	}
 
 	if (hyp_vcpu && transfer) {
-		transfer->ffa_handle = PACK_HANDLE(res->a2, res->a3);
+		transfer->ffa_handle = ffa_handle;
 		list_add(&transfer->node, &ffa_buf->xfer_list);
 	}
 
