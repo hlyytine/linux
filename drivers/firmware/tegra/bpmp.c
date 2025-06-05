@@ -32,6 +32,19 @@ channel_to_ops(struct tegra_bpmp_channel *channel)
 	return bpmp->soc->ops;
 }
 
+
+struct tegra_bpmp *tegra_bpmp_host_device = NULL;
+EXPORT_SYMBOL_GPL(tegra_bpmp_host_device);
+
+int (*tegra_bpmp_transfer_redirect)(struct tegra_bpmp *bpmp,
+			struct tegra_bpmp_message *msg) = NULL;
+int tegra_bpmp_outloud = 0;
+uint64_t bpmp_vpa = 0;
+
+EXPORT_SYMBOL_GPL(tegra_bpmp_transfer_redirect);
+EXPORT_SYMBOL_GPL(tegra_bpmp_outloud);
+EXPORT_SYMBOL_GPL(bpmp_vpa);
+
 struct tegra_bpmp *tegra_bpmp_get(struct device *dev)
 {
 	struct platform_device *pdev;
@@ -57,6 +70,7 @@ struct tegra_bpmp *tegra_bpmp_get(struct device *dev)
 
 put:
 	of_node_put(np);
+	tegra_bpmp_host_device = bpmp;
 	return bpmp;
 }
 EXPORT_SYMBOL_GPL(tegra_bpmp_get);
@@ -333,6 +347,25 @@ int tegra_bpmp_transfer_atomic(struct tegra_bpmp *bpmp,
 
 	spin_lock(&bpmp->atomic_tx_lock);
 
+	// vadikas -- redirect request to virtio module
+	if (tegra_bpmp_transfer_redirect) {
+		if (tegra_bpmp_outloud){
+	        printk("tegra_bpmp_transfer_redirect tx: %x tx.size= %ld \n",
+				msg->mrq, msg->tx.size);
+	        print_hex_dump(KERN_INFO, "tegra_bpmp_transfer_redirect tx:",
+				DUMP_PREFIX_NONE, 16, 1, msg->tx.data, msg->tx.size, false);
+	    }
+		err = (*tegra_bpmp_transfer_redirect)(bpmp, msg);
+
+	    if (tegra_bpmp_outloud){
+	        printk("tegra_bpmp_transfer_redirect rx: err=%d\n msg->rx.ret=%d",
+				err, msg->rx.ret);
+	        print_hex_dump(KERN_INFO, "tegra_bpmp_transfer_redirect rx:" ,
+				DUMP_PREFIX_NONE, 16, 1, msg->rx.data, msg->rx.size, false);
+	    }
+		return err;
+	}
+
 	err = tegra_bpmp_channel_write(channel, msg->mrq, MSG_ACK,
 				       msg->tx.data, msg->tx.size);
 	if (err < 0) {
@@ -376,8 +409,36 @@ int tegra_bpmp_transfer(struct tegra_bpmp *bpmp,
 			return -EAGAIN;
 	}
 
+	// vadikas -- redirect request to virtio module
+	if (tegra_bpmp_transfer_redirect) {
+		if (tegra_bpmp_outloud && (msg->mrq != 0x4B)){
+			printk("\n");
+	        printk("tegra_bpmp_transfer_redirect tx,msg->mrq: 0x%0X tx.size=%ld \n", 
+				msg->mrq, msg->tx.size);
+	        print_hex_dump(KERN_INFO, "tegra_bpmp_transfer_redirect tx:",
+				DUMP_PREFIX_NONE, 16, 1, msg->tx.data, msg->tx.size, false);
+	    }
+
+		err = (*tegra_bpmp_transfer_redirect)(bpmp, msg);
+	
+	    if (tegra_bpmp_outloud && (msg->mrq != 0x4B)){
+	        printk("tegra_bpmp_transfer_redirect rx: err=%d, msg->rx.ret=%d, msg->rx.size:%ld\n", 
+				err, msg->rx.ret, msg->rx.size);
+	        print_hex_dump(KERN_INFO,"tegra_bpmp_transfer_redirect rx:",
+				DUMP_PREFIX_NONE, 16, 1, msg->rx.data, msg->rx.size, false);
+	    }
+		return err;
+	}
+
 	channel = tegra_bpmp_write_threaded(bpmp, msg->mrq, msg->tx.data,
 					    msg->tx.size);
+
+	if (tegra_bpmp_outloud){
+	    printk("tegra_bpmp_transfer tx: %x tx.size= %ld \n", msg->mrq, msg->tx.size);
+	    print_hex_dump(KERN_INFO, "tegra_bpmp_transfer tx:" ,DUMP_PREFIX_NONE, 16, 1, msg->tx.data, msg->tx.size, false);
+	}
+
+
 	if (IS_ERR(channel))
 		return PTR_ERR(channel);
 
@@ -391,8 +452,15 @@ int tegra_bpmp_transfer(struct tegra_bpmp *bpmp,
 	if (err == 0)
 		return -ETIMEDOUT;
 
-	return tegra_bpmp_channel_read(channel, msg->rx.data, msg->rx.size,
+	err = tegra_bpmp_channel_read(channel, msg->rx.data, msg->rx.size,
 				       &msg->rx.ret);
+
+	if(tegra_bpmp_outloud){
+	    printk("tegra_bpmp_transfer rx: err=%d\n msg->rx.ret=%d", err, msg->rx.ret);
+	    print_hex_dump(KERN_INFO,"tegra_bpmp_transfer rx:" ,DUMP_PREFIX_NONE, 16, 1, msg->rx.data, msg->rx.size, false);
+	}
+
+	return err;
 }
 EXPORT_SYMBOL_GPL(tegra_bpmp_transfer);
 

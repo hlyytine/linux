@@ -25,3 +25,6 @@ config TEGRA_BPMP
 	  firmware running on BPMP.
 
 endmenu
+
+source "drivers/firmware/tegra/bpmp-host-proxy/Kconfig"
+source "drivers/firmware/tegra/bpmp-guest-proxy/Kconfig"
