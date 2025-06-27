@@ -1776,10 +1776,12 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
 		 * case, that possible is because the VMA for the device mapping is VM_IO,
 		 * which fails in check_vma_flags() with -EFAULT
 		 */
+		struct page *dev_page;
+		bool writable;
 		bool device;
 
-		pfn = __gfn_to_pfn_memslot(memslot, gfn, false, false, NULL,
-					   kvm_is_write_fault(vcpu), NULL, NULL);
+		pfn = __kvm_faultin_pfn(memslot, gfn, kvm_is_write_fault(vcpu) ? FOLL_WRITE : 0,
+					&writable, &dev_page);
 		if (is_error_noslot_pfn(pfn))
 			goto free_ppage;
 		device = kvm_is_device_pfn(pfn);
@@ -1790,8 +1792,7 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t *fault_ipa,
 			else if (!ret && size)
 				*size = PAGE_SIZE;
 		} else {
-			/* Release pin from __gfn_to_pfn_memslot(). */
-			kvm_release_pfn_clean(pfn);
+			kvm_release_faultin_page(kvm, dev_page, true, writable);
 		}
 
 		goto free_ppage;
