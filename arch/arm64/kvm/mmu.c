@@ -1684,8 +1684,12 @@ static int __pkvm_mem_abort_device(struct kvm_vcpu *vcpu, struct kvm_memory_slot
 				   gfn_t gfn, u64 nr_pages)
 {
 	while (nr_pages--) {
-		kvm_pfn_t pfn = __gfn_to_pfn_memslot(memslot, gfn, false, false, NULL,
-						     kvm_is_write_fault(vcpu), NULL, NULL);
+		struct page *dev_page;
+		bool writable;
+		kvm_pfn_t pfn = __kvm_faultin_pfn(memslot, gfn,
+						  kvm_is_write_fault(vcpu) ? FOLL_WRITE : 0,
+						  &writable, &dev_page);
+
 		if (is_error_noslot_pfn(pfn))
 			return -EFAULT;
 
@@ -1695,8 +1699,7 @@ static int __pkvm_mem_abort_device(struct kvm_vcpu *vcpu, struct kvm_memory_slot
 			if (ret == -EEXIST)
 				ret = 0; /* We might have raced with another vCPU. */
 		} else {
-			/* Release pin from __gfn_to_pfn_memslot(). */
-			kvm_release_pfn_clean(pfn);
+			kvm_release_faultin_page(vcpu->kvm, dev_page, true, writable);
 			return -EFAULT;
 		}
 
