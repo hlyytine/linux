@@ -511,14 +511,30 @@ static inline unsigned long kvm_vcpu_get_mpidr_aff(struct kvm_vcpu *vcpu)
 	return __vcpu_sys_reg(vcpu, MPIDR_EL1) & MPIDR_HWID_BITMASK;
 }
 
+static inline u64 kvm_vcpu_get_sctlr(struct kvm_vcpu *vcpu)
+{
+	if (!is_nvhe_hyp_code())
+		return vcpu_read_sys_reg(vcpu, SCTLR_EL1);
+
+	return __vcpu_sys_reg(vcpu, SCTLR_EL1);
+}
+
+static inline void kvm_vcpu_set_sctlr(struct kvm_vcpu *vcpu, u64 sctlr)
+{
+	if (!is_nvhe_hyp_code())
+		vcpu_write_sys_reg(vcpu, sctlr, SCTLR_EL1);
+	else
+		__vcpu_assign_sys_reg(vcpu, SCTLR_EL1, sctlr);
+}
+
 static inline void kvm_vcpu_set_be(struct kvm_vcpu *vcpu)
 {
 	if (vcpu_mode_is_32bit(vcpu)) {
 		*vcpu_cpsr(vcpu) |= PSR_AA32_E_BIT;
 	} else {
-		u64 sctlr = vcpu_read_sys_reg(vcpu, SCTLR_EL1);
+		u64 sctlr = kvm_vcpu_get_sctlr(vcpu);
 		sctlr |= SCTLR_ELx_EE;
-		vcpu_write_sys_reg(vcpu, sctlr, SCTLR_EL1);
+		kvm_vcpu_set_sctlr(vcpu, sctlr);
 	}
 }
 
@@ -528,9 +544,9 @@ static inline bool kvm_vcpu_is_be(struct kvm_vcpu *vcpu)
 		return !!(*vcpu_cpsr(vcpu) & PSR_AA32_E_BIT);
 
 	if (vcpu_mode_priv(vcpu))
-		return !!(vcpu_read_sys_reg(vcpu, SCTLR_EL1) & SCTLR_ELx_EE);
+		return !!(kvm_vcpu_get_sctlr(vcpu) & SCTLR_ELx_EE);
 	else
-		return !!(vcpu_read_sys_reg(vcpu, SCTLR_EL1) & SCTLR_EL1_E0E);
+		return !!(kvm_vcpu_get_sctlr(vcpu) & SCTLR_EL1_E0E);
 }
 
 static inline unsigned long vcpu_data_guest_to_host(struct kvm_vcpu *vcpu,
