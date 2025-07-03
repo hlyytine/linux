@@ -967,7 +967,7 @@ unlock:
 	return ret;
 }
 
-static void hyp_poison_page(phys_addr_t phys)
+void hyp_poison_page(phys_addr_t phys)
 {
 	void *addr = hyp_fixmap_map(phys);
 
