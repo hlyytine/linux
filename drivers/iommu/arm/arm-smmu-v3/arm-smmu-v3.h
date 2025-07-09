@@ -523,6 +523,17 @@ int arm_smmu_setup_irqs(struct arm_smmu_device *smmu,
 			irqreturn_t evtqirq(int irq, void *dev),
 			irqreturn_t gerrorirq(int irq, void *dev),
 			irqreturn_t priirq(int irq, void *dev));
+irqreturn_t arm_smmu_gerror_common(int irq, void *dev,
+				   void(*cmd_err)(struct arm_smmu_device *smmu));
+irqreturn_t arm_smmu_evtq_common(int irq, void *dev,
+				 int handle_event(struct arm_smmu_device *smmu,
+						  u64 *evt, struct arm_smmu_event *event));
+int arm_smmu_insert_master(struct arm_smmu_device *smmu,
+			   struct arm_smmu_master *master, bool init_ste);
+void arm_smmu_remove_master(struct arm_smmu_master *master);
+struct arm_smmu_master *
+arm_smmu_find_master(struct arm_smmu_device *smmu, u32 sid);
+int arm_smmu_init_sid_strtab(struct arm_smmu_device *smmu, u32 sid);
 
 /* Low-level queue manipulation functions */
 static inline bool queue_has_space(struct arm_smmu_ll_queue *q, u32 n)
