@@ -1659,6 +1659,14 @@ static void handle___pkvm_iommu_disable_dev(struct kvm_cpu_context *host_ctxt)
 	cpu_reg(host_ctxt, 1) = kvm_iommu_disable_dev(iommu, dev);
 }
 
+static void handle___pkvm_host_hvc_pd(struct kvm_cpu_context *host_ctxt)
+{
+	DECLARE_REG(u64, device_id, host_ctxt, 1);
+	DECLARE_REG(u64, on, host_ctxt, 2);
+
+	cpu_reg(host_ctxt, 1) = pkvm_host_hvc_pd(device_id, on);
+}
+
 typedef void (*hcall_t)(struct kvm_cpu_context *);
 
 #define HANDLE_FUNC(x)	[__KVM_HOST_SMCCC_FUNC_##x] = (hcall_t)handle_##x
@@ -1724,6 +1732,7 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__pkvm_ptdump),
 	HANDLE_FUNC(__pkvm_iommu_enable_dev),
 	HANDLE_FUNC(__pkvm_iommu_disable_dev),
+	HANDLE_FUNC(__pkvm_host_hvc_pd),
 };
 
 static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
