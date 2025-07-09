@@ -23,6 +23,7 @@ int pkvm_create_hyp_vm(struct kvm *kvm);
 void pkvm_finalize_destroy_hyp_vm(struct kvm *kvm);
 int pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu);
 bool pkvm_is_hyp_created(struct kvm *kvm);
+void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa);
 
 /*
  * This functions as an allow-list of protected VM capabilities.
