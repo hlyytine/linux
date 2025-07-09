@@ -118,6 +118,7 @@ enum __kvm_host_smccc_func {
 	__KVM_HOST_SMCCC_FUNC___pkvm_host_get_ffa_version,
 	__KVM_HOST_SMCCC_FUNC___pkvm_iommu_enable_dev,
 	__KVM_HOST_SMCCC_FUNC___pkvm_iommu_disable_dev,
+	__KVM_HOST_SMCCC_FUNC___pkvm_host_hvc_pd,
 	/*
 	 * Start of the dynamically registered hypercalls. Start a bit
 	 * further, just in case some modules...
