@@ -275,7 +275,7 @@ static int __pkvm_create_hyp_vm(struct kvm *host_kvm)
 	WRITE_ONCE(host_kvm->arch.pkvm.handle, ret);
 
 	host_kvm->arch.pkvm.stage2_teardown_mc.flags |= HYP_MEMCACHE_ACCOUNT_STAGE2;
-	kvm_account_pgtable_pages(pgd, pgd_sz / PAGE_SIZE);
+	kvm_account_pgtable_pages(pgd, pgd_sz >> PAGE_SHIFT);
 
 	return 0;
 free_pgd:
