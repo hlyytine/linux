@@ -8,6 +8,7 @@
 #include <linux/kvm_host.h>
 #include <linux/io.h>
 #include <linux/hugetlb.h>
+#include <linux/interval_tree_generic.h>
 #include <linux/sched/signal.h>
 #include <trace/events/kvm.h>
 #include <asm/pgalloc.h>
@@ -303,6 +304,25 @@ static void invalidate_icache_guest_page(void *va, size_t size)
 {
 	__invalidate_icache_guest_page(va, size);
 }
+
+static u64 __pinned_page_start(struct kvm_pinned_page *ppage)
+{
+	return ppage->ipa;
+}
+
+static u64 __pinned_page_end(struct kvm_pinned_page *ppage)
+{
+	return ppage->ipa + (1 << (ppage->order + PAGE_SHIFT)) - 1;
+}
+
+INTERVAL_TREE_DEFINE(struct kvm_pinned_page, node, u64, __subtree_last,
+		     __pinned_page_start, __pinned_page_end, /* empty */,
+		     kvm_pinned_pages);
+
+#define for_ppage_node_in_range(kvm, start, end, __ppage, __tmp)				\
+	for (__ppage = kvm_pinned_pages_iter_first(&(kvm)->arch.pkvm.pinned_pages, start, end - 1);\
+	     __ppage && ({ __tmp = kvm_pinned_pages_iter_next(__ppage, start, end - 1); 1; });	\
+	     __ppage = __tmp)
 
 /*
  * Unmapping vs dcache management:
@@ -950,6 +970,8 @@ int kvm_init_stage2_mmu(struct kvm *kvm, struct kvm_s2_mmu *mmu, unsigned long t
 	int cpu, err;
 	struct kvm_pgtable *pgt;
 
+	kvm->arch.pkvm.pinned_pages = RB_ROOT_CACHED;
+
 	/*
 	 * If we already have our page tables in place, and that the
 	 * MMU context is the canonical one, we have a bug somewhere,
@@ -1499,12 +1521,41 @@ static bool kvm_vma_mte_allowed(struct vm_area_struct *vma)
 	return vma->vm_flags & VM_MTE_ALLOWED;
 }
 
+static struct kvm_pinned_page *find_ppage(struct kvm *kvm, u64 ipa)
+{
+	return kvm_pinned_pages_iter_first(&kvm->arch.pkvm.pinned_pages,
+					   ipa, ipa + PAGE_SIZE - 1);
+}
+
+static int insert_ppage(struct kvm *kvm, struct kvm_pinned_page *ppage)
+{
+	if (find_ppage(kvm, ppage->ipa))
+		return -EEXIST;
+
+	kvm_pinned_pages_insert(ppage, &kvm->arch.pkvm.pinned_pages);
+
+	return 0;
+}
+
+static int pkvm_host_map_guest(u64 pfn, u64 gfn, struct kvm_vcpu *vcpu)
+{
+	int ret = kvm_call_hyp_nvhe(__pkvm_host_map_guest, pfn, gfn, KVM_PGTABLE_PROT_RWX);
+
+	/*
+	 * Getting -EPERM at this point implies that the pfn has already been
+	 * mapped. This should only ever happen when two vCPUs faulted on the
+	 * same page, and the current one lost the race to do the mapping.
+	 */
+	return (ret == -EPERM) ? -EAGAIN : ret;
+}
+
 static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 		struct kvm_memory_slot *memslot, unsigned long hva)
 {
 	struct kvm_hyp_memcache *hyp_memcache = &vcpu->arch.stage2_mc;
 	unsigned int flags = FOLL_HWPOISON | FOLL_LONGTERM | FOLL_WRITE;
 	struct mm_struct *mm = current->mm;
+	struct kvm_pinned_page *ppage;
 	struct kvm *kvm = vcpu->kvm;
 	struct kvm_s2_mmu *mmu =  &kvm->arch.mmu;
 	struct page *page;
@@ -1518,9 +1569,13 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	nr_pages = hyp_memcache->nr_pages - nr_pages;
 	atomic64_add(nr_pages << PAGE_SHIFT, &kvm->stat.protected_hyp_mem);
 
+	ppage = kmalloc(sizeof(*ppage), GFP_KERNEL_ACCOUNT);
+	if (!ppage)
+		return -ENOMEM;
+
 	ret = account_locked_vm(mm, 1, true);
 	if (ret)
-		return ret;
+		goto free_ppage;
 
 	mmap_read_lock(mm);
 	ret = pin_user_pages(hva, 1, flags, &page);
@@ -1553,8 +1608,15 @@ static int pkvm_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	}
 
 	write_lock(&kvm->mmu_lock);
-	ret = KVM_PGT_FN(kvm_pgtable_stage2_map)(mmu->pgt, fault_ipa, PAGE_SIZE, page_to_phys(page),
-						 KVM_PGTABLE_PROT_RWX, hyp_memcache, 0);
+	ret = pkvm_host_map_guest(page_to_pfn(page), fault_ipa >> PAGE_SHIFT, vcpu);
+	if (ret)
+		goto unlock;
+
+	ppage->page = page;
+	ppage->ipa = fault_ipa;
+	ppage->order = 0;
+	WARN_ON(insert_ppage(kvm, ppage));
+unlock:
 	write_unlock(&kvm->mmu_lock);
 	if (ret) {
 		if (ret == -EAGAIN)
@@ -1567,6 +1629,9 @@ unpin:
 	unpin_user_pages(&page, 1);
 dec_account:
 	account_locked_vm(mm, 1, false);
+free_ppage:
+	kfree(ppage);
+
 	return ret;
 }
 
