@@ -249,4 +249,21 @@ int arm_lpae_init_pgtable_s1(struct io_pgtable_cfg *cfg,
 int arm_lpae_init_pgtable_s2(struct io_pgtable_cfg *cfg,
 			     struct arm_lpae_io_pgtable *data,
 			     void *cookie);
+
+struct io_pgtable_walk_data {
+	struct io_pgtable		*iop;
+	void				*data;
+	int (*visit)(struct io_pgtable_walk_data *walk_data, int lvl,
+		     arm_lpae_iopte *ptep, size_t size);
+	unsigned long			flags;
+	u64				addr;
+	const u64			end;
+};
+
+int arm_lpae_pgtable_walk(struct io_pgtable_ops *ops, unsigned long iova, void *wd);
+phys_addr_t arm_lpae_iova_to_phys(struct io_pgtable_ops *ops, unsigned long iova);
+int __arm_lpae_iopte_walk(struct arm_lpae_io_pgtable *data,
+			  struct io_pgtable_walk_data *walk_data,
+			  arm_lpae_iopte *ptep,
+			  int lvl);
 #endif /* IO_PGTABLE_H_ */
