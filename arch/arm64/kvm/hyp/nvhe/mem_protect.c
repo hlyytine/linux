@@ -981,6 +981,7 @@ static int __host_set_page_state_range(u64 addr, u64 size,
 
 		if (ret)
 			return ret;
+		kvm_iommu_host_stage2_idmap(addr, addr + size, PKVM_HOST_MEM_PROT);
 	}
 
 	__host_update_page_state(addr, size, state);
@@ -1539,6 +1540,7 @@ int module_change_host_page_prot(u64 pfn, enum kvm_pgtable_prot prot, u64 nr_pag
 	struct kvm_mem_range range;
 	struct memblock_region *reg;
 	int ret;
+	size_t size = nr_pages << PAGE_SHIFT;
 
 	if ((prot & MODULE_PROT_ALLOWLIST) != prot)
 		return -EINVAL;
@@ -1586,12 +1588,13 @@ int module_change_host_page_prot(u64 pfn, enum kvm_pgtable_prot prot, u64 nr_pag
 
 update:
 	if (!prot) {
-		ret = __host_stage2_set_owner_locked(addr, nr_pages << PAGE_SHIFT,
-				PKVM_ID_PROTECTED, !!reg,
-				PKVM_MODULE_OWNED_PAGE);
+		ret = __host_stage2_set_owner_locked(addr, size,
+						     PKVM_ID_PROTECTED, !!reg,
+						     PKVM_MODULE_OWNED_PAGE);
 	} else {
 		ret = host_stage2_idmap_locked(
-				addr, nr_pages << PAGE_SHIFT, prot);
+				addr, size, prot);
+		kvm_iommu_host_stage2_idmap(addr, addr + size, prot);
 	}
 
 	if (WARN_ON(ret) || !page || !prot)
