@@ -153,6 +153,9 @@ static void prepare_host_vtcr(void)
 					      id_aa64mmfr1_el1_sys_val, phys_shift);
 }
 
+static int host_stage2_idmap_locked(phys_addr_t addr, u64 size,
+				    enum kvm_pgtable_prot prot);
+
 static int prepopulate_host_stage2(void)
 {
 	struct memblock_region *reg;
@@ -657,8 +660,8 @@ static int host_stage2_adjust_range(u64 addr, struct kvm_mem_range *range)
 	return 0;
 }
 
-int host_stage2_idmap_locked(phys_addr_t addr, u64 size,
-			     enum kvm_pgtable_prot prot)
+static int host_stage2_idmap_locked(phys_addr_t addr, u64 size,
+				    enum kvm_pgtable_prot prot)
 {
 	return host_stage2_try(__host_stage2_idmap, addr, addr + size, prot);
 }
@@ -1239,23 +1242,7 @@ int __pkvm_host_donate_hyp(u64 pfn, u64 nr_pages)
 	return ___pkvm_host_donate_hyp(pfn, nr_pages, false);
 }
 
-int ___pkvm_host_donate_hyp(u64 pfn, u64 nr_pages, bool accept_mmio)
-{
-	phys_addr_t start = hyp_pfn_to_phys(pfn);
-	phys_addr_t end = start + (nr_pages << PAGE_SHIFT);
-	int ret;
-
-	if (!accept_mmio && !range_is_memory(start, end))
-		return -EPERM;
-
-	host_lock_component();
-	ret = __pkvm_host_donate_hyp_locked(pfn, nr_pages);
-	host_unlock_component();
-
-	return ret;
-}
-
-int __pkvm_host_donate_hyp_locked(u64 pfn, u64 nr_pages)
+static int __pkvm_host_donate_hyp_locked(u64 pfn, u64 nr_pages)
 {
 	u64 size, phys = hyp_pfn_to_phys(pfn);
 	void *virt = __hyp_va(phys);
@@ -1289,6 +1276,22 @@ int __pkvm_host_donate_hyp_locked(u64 pfn, u64 nr_pages)
 
 unlock:
 	hyp_unlock_component();
+
+	return ret;
+}
+
+int ___pkvm_host_donate_hyp(u64 pfn, u64 nr_pages, bool accept_mmio)
+{
+	phys_addr_t start = hyp_pfn_to_phys(pfn);
+	phys_addr_t end = start + (nr_pages << PAGE_SHIFT);
+	int ret;
+
+	if (!accept_mmio && !range_is_memory(start, end))
+		return -EPERM;
+
+	host_lock_component();
+	ret = __pkvm_host_donate_hyp_locked(pfn, nr_pages);
+	host_unlock_component();
 
 	return ret;
 }
