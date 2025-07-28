@@ -544,8 +544,8 @@ static void smmu_init_s2_ste(struct arm_smmu_ste *ste)
 	ste->data[3] = cfg->arm_lpae_s2_cfg.vttbr & STRTAB_STE_3_S2TTB_MASK;
 }
 
-static int smmu_attach_dev(pkvm_handle_t iommu, pkvm_handle_t domain, pkvm_handle_t dev,
-			   u32 pasid, u32 pasid_bits, unsigned long flags)
+static int smmu_attach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *domain,
+			   pkvm_handle_t dev, u32 pasid, u32 pasid_bits, unsigned long flags)
 {
 	static struct arm_smmu_ste *ste, target;
 	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
@@ -574,8 +574,8 @@ out_ret:
 	return ret;
 }
 
-static int smmu_detach_dev(pkvm_handle_t iommu, pkvm_handle_t domain, pkvm_handle_t dev,
-			   u32 pasid)
+static int smmu_detach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *domain,
+			   pkvm_handle_t dev, u32 pasid)
 {
 	static struct arm_smmu_ste *ste;
 	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
