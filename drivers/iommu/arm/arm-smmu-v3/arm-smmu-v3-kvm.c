@@ -7,6 +7,7 @@
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_pkvm.h>
 
+#include <linux/io-pgtable.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
 
@@ -22,12 +23,22 @@ struct host_arm_smmu_device {
 	struct kvm_power_domain         power_domain;
 };
 
+struct kvm_arm_smmu_domain {
+	struct iommu_domain		domain;
+	struct arm_smmu_device		*smmu;
+	struct mutex			init_mutex;
+	pkvm_handle_t			id;
+};
+#define to_kvm_smmu_domain(_domain) \
+	container_of(_domain, struct kvm_arm_smmu_domain, domain)
+
 #define smmu_to_host(_smmu) \
 	container_of(_smmu, struct host_arm_smmu_device, smmu);
 
 static size_t				kvm_arm_smmu_cur;
 static size_t				kvm_arm_smmu_count;
 static struct hyp_arm_smmu_v3_device	*kvm_arm_smmu_array;
+static DEFINE_IDA(kvm_arm_smmu_domain_ida);
 
 __maybe_unused
 static int kvm_arm_smmu_topup_memcache(struct arm_smccc_res *res, gfp_t gfp)
@@ -234,25 +245,133 @@ static struct iommu_device *kvm_arm_smmu_probe_device(struct device *dev)
 	return ERR_PTR(ret);
 }
 
-static void kvm_arm_smmu_release_device(struct device *dev)
+static void kvm_arm_smmu_detach_dev(struct device *dev)
 {
 	int i;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(master->smmu);
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+	struct kvm_arm_smmu_domain *kvm_smmu_domain;
 
+	if (!domain)
+		return;
+
+	kvm_smmu_domain = to_kvm_smmu_domain(domain);
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id, 0, sid, 0);
+		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
+				  kvm_smmu_domain->id, sid, 0);
 	}
+}
+
+static void kvm_arm_smmu_release_device(struct device *dev)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	kvm_arm_smmu_detach_dev(dev);
 	arm_smmu_remove_master(master);
 }
 
 static phys_addr_t kvm_arm_smmu_iova_to_phys(struct iommu_domain *domain,
 					     dma_addr_t iova)
 {
-	return iova;
+	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
+
+	return kvm_call_hyp_nvhe(__pkvm_host_iommu_iova_to_phys, kvm_smmu_domain->id, iova);
+}
+
+static int kvm_arm_smmu_domain_finalize(struct kvm_arm_smmu_domain *kvm_smmu_domain,
+					struct arm_smmu_master *master)
+{
+	int ret = 0;
+	struct arm_smmu_device *smmu = master->smmu;
+	enum kvm_arm_smmu_domain_type type;
+	struct io_pgtable_cfg cfg;
+	unsigned long ias;
+	static bool identity_allocated = false;
+
+	if (kvm_smmu_domain->smmu && (kvm_smmu_domain->smmu != smmu))
+		return -EINVAL;
+
+	if (kvm_smmu_domain->smmu)
+		return 0;
+
+	if (kvm_smmu_domain->domain.type == IOMMU_DOMAIN_IDENTITY) {
+		kvm_smmu_domain->id = 0;
+		if (!identity_allocated) {
+			ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
+						   0, KVM_ARM_SMMU_DOMAIN_BYPASS);
+			if (ret)
+				return ret;
+			identity_allocated = true;
+		}
+		/*
+		 * Identity domains doesn't use the DMA API, so no need to
+		 * set the  domain aperture.
+		 */
+		goto out;
+	}
+
+	/* Default to stage-1. */
+	if (smmu->features & ARM_SMMU_FEAT_TRANS_S1) {
+		ias = (smmu->features & ARM_SMMU_FEAT_VAX) ? 52 : 48;
+		cfg = (struct io_pgtable_cfg) {
+			.fmt = ARM_64_LPAE_S1,
+			.pgsize_bitmap = smmu->pgsize_bitmap,
+			.ias = min_t(unsigned long, ias, VA_BITS),
+			.oas = smmu->ias,
+			.coherent_walk = smmu->features & ARM_SMMU_FEAT_COHERENCY,
+		};
+		type = KVM_ARM_SMMU_DOMAIN_S1;
+	} else {
+		cfg = (struct io_pgtable_cfg) {
+			.fmt = ARM_64_LPAE_S2,
+			.pgsize_bitmap = smmu->pgsize_bitmap,
+			.ias = smmu->ias,
+			.oas = smmu->oas,
+			.coherent_walk = smmu->features & ARM_SMMU_FEAT_COHERENCY,
+		};
+		ret = io_pgtable_configure(&cfg);
+		if (ret)
+			return ret;
+
+		type = KVM_ARM_SMMU_DOMAIN_S2;
+		kvm_smmu_domain->domain.pgsize_bitmap = cfg.pgsize_bitmap;
+		kvm_smmu_domain->domain.geometry.aperture_end = (1UL << cfg.ias) - 1;
+	}
+	ret = io_pgtable_configure(&cfg);
+	if (ret)
+		return ret;
+
+	kvm_smmu_domain->domain.pgsize_bitmap = cfg.pgsize_bitmap;
+	kvm_smmu_domain->domain.geometry.aperture_end = (1UL << cfg.ias) - 1;
+	kvm_smmu_domain->domain.geometry.force_aperture = true;
+
+	/*
+	 * The hypervisor uses the domain_id for asid/vmid so it has to be
+	 * unique, and it has to be in range of this smmu, which can be
+	 * either 8 or 16 bits.
+	 */
+	// FIX ME EXPROT MAX_DOMAINS
+	ret = ida_alloc_range(&kvm_arm_smmu_domain_ida, 1,
+			      512, GFP_KERNEL);
+	if (ret < 0)
+		return ret;
+
+	kvm_smmu_domain->id = ret;
+
+	ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
+				   kvm_smmu_domain->id, type);
+	if (ret) {
+		ida_free(&kvm_arm_smmu_domain_ida, kvm_smmu_domain->id);
+		return ret;
+	}
+
+out:
+	kvm_smmu_domain->smmu = smmu;
+	return ret;
 }
 
 static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
@@ -262,31 +381,84 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(master->smmu);
+	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
+
+	kvm_arm_smmu_detach_dev(dev);
+
+	mutex_lock(&kvm_smmu_domain->init_mutex);
+	ret = kvm_arm_smmu_domain_finalize(kvm_smmu_domain, master);
+	mutex_unlock(&kvm_smmu_domain->init_mutex);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		ret = kvm_call_hyp_nvhe(__pkvm_host_iommu_attach_dev, host_smmu->id, 0, sid, 0, 0, 0);
+		ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_attach_dev, host_smmu->id,
+					   kvm_smmu_domain->id, sid, 0, 0, 0);
 		if (ret)
 			goto out_err;
 	}
 	return ret;
 out_err:
 	while (i--)
-		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id, 0, fwspec->ids[i], 0);
+		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
+				  kvm_smmu_domain->id, fwspec->ids[i], 0);
 
 	return ret;
 }
 
-static struct iommu_domain kvm_arm_smmu_def_domain = {
-	.type = IOMMU_DOMAIN_IDENTITY,
-	.ops = &(const struct iommu_domain_ops) {
-		.attach_dev	= kvm_arm_smmu_attach_dev,
-		.iova_to_phys	= kvm_arm_smmu_iova_to_phys,
+static struct iommu_domain *kvm_arm_smmu_domain_alloc(unsigned type)
+{
+	struct kvm_arm_smmu_domain *smmu_domain;
+
+	if (type != IOMMU_DOMAIN_IDENTITY &&
+	    type != IOMMU_DOMAIN_DMA &&
+	    type != IOMMU_DOMAIN_UNMANAGED)
+		return ERR_PTR(-EINVAL);
+
+	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
+	if (!smmu_domain)
+		return ERR_PTR(-ENOMEM);
+
+	mutex_init(&smmu_domain->init_mutex);
+	return &smmu_domain->domain;
+}
+
+static void kvm_arm_smmu_free_domain(struct iommu_domain *domain)
+{
+	int ret;
+	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
+	struct arm_smmu_device *smmu = kvm_smmu_domain->smmu;
+
+	if (smmu) {
+		ret = kvm_call_hyp_nvhe(__pkvm_host_iommu_free_domain, kvm_smmu_domain->id);
+		ida_free(&kvm_arm_smmu_domain_ida, kvm_smmu_domain->id);
 	}
-};
+	kfree(kvm_smmu_domain);
+}
+
+static int kvm_arm_smmu_def_domain_type(struct device *dev)
+{
+	return IOMMU_DOMAIN_IDENTITY;
+}
+
+static bool kvm_arm_smmu_capable(struct device *dev, enum iommu_cap cap)
+{
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	switch (cap) {
+	case IOMMU_CAP_CACHE_COHERENCY:
+		return master->smmu->features & ARM_SMMU_FEAT_COHERENCY;
+	case IOMMU_CAP_NOEXEC:
+		return true;
+	default:
+		return false;
+	}
+}
 
 static struct iommu_ops kvm_arm_smmu_ops = {
+	.capable		= kvm_arm_smmu_capable,
 	.device_group		= arm_smmu_device_group,
 	.of_xlate		= arm_smmu_of_xlate,
 	.get_resv_regions	= arm_smmu_get_resv_regions,
@@ -294,7 +466,13 @@ static struct iommu_ops kvm_arm_smmu_ops = {
 	.release_device		= kvm_arm_smmu_release_device,
 	.pgsize_bitmap		= -1UL,
 	.owner			= THIS_MODULE,
-	.default_domain 	= &kvm_arm_smmu_def_domain,
+	.domain_alloc		= kvm_arm_smmu_domain_alloc,
+	.def_domain_type	= kvm_arm_smmu_def_domain_type,
+	.default_domain_ops 	=  &(const struct iommu_domain_ops) {
+		.attach_dev	= kvm_arm_smmu_attach_dev,
+		.iova_to_phys	= kvm_arm_smmu_iova_to_phys,
+		.free		= kvm_arm_smmu_free_domain,
+	}
 };
 
 static int kvm_arm_probe_power_domain(struct device *dev,
@@ -369,6 +547,11 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 
 	if (!kvm_arm_smmu_validate_features(smmu))
 		return -ENODEV;
+
+	if (kvm_arm_smmu_ops.pgsize_bitmap == -1UL)
+		kvm_arm_smmu_ops.pgsize_bitmap = smmu->pgsize_bitmap;
+	else
+		kvm_arm_smmu_ops.pgsize_bitmap |= smmu->pgsize_bitmap;
 
 	ret = arm_smmu_init_one_queue(smmu, &smmu->cmdq.q, smmu->base,
 				      ARM_SMMU_CMDQ_PROD, ARM_SMMU_CMDQ_CONS,
