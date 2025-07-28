@@ -1604,7 +1604,6 @@ int __pkvm_guest_unshare_host(u64 gfn, struct pkvm_hyp_vcpu *vcpu, u64 nr_pages,
 	ret = 0;
 	WARN_ON(host_stage2_set_owner_locked(phys, size, PKVM_ID_GUEST));
 	psci_mem_protect_inc(nr_pages);
-		goto unlock;
 	WARN_ON(kvm_pgtable_stage2_map(&vm->pgt, ipa, size, phys,
 				       pkvm_mkstate(KVM_PGTABLE_PROT_RWX, PKVM_PAGE_OWNED),
 				       &vcpu->vcpu.arch.stage2_mc, 0));
