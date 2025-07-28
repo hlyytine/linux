@@ -19,7 +19,7 @@ void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
 	if (!PAGE_ALIGNED(size))
 		return NULL;
 
-	addr = kvm_iommu_donate_pages(get_order(size));
+	addr = kvm_iommu_donate_pages_atomic(get_order(size));
 
 	if (addr && !cfg->coherent_walk)
 		kvm_flush_dcache_to_poc(addr, size);
@@ -33,7 +33,7 @@ void __arm_lpae_free_pages(void *addr, size_t size, struct io_pgtable_cfg *cfg,
 	if (!cfg->coherent_walk)
 		kvm_flush_dcache_to_poc(addr, size);
 
-	kvm_iommu_reclaim_pages(addr);
+	kvm_iommu_reclaim_pages_atomic(addr);
 }
 
 void __arm_lpae_sync_pte(arm_lpae_iopte *ptep, int num_entries,
@@ -72,7 +72,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	struct arm_lpae_io_pgtable *data;
 	int ret;
 
-	data = kvm_iommu_donate_pages(get_order(sizeof(*data)));
+	data = kvm_iommu_donate_pages_atomic(get_order(sizeof(*data)));
 	if (!data) {
 		*out_ret = -ENOMEM;
 		return NULL;
@@ -109,7 +109,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	*out_ret = 0;
 	return &data->iop;
 out_free:
-	kvm_iommu_reclaim_pages(data);
+	kvm_iommu_reclaim_pages_atomic(data);
 	*out_ret = ret;
 	return NULL;
 }

@@ -219,7 +219,7 @@ static int smmu_alloc_l2_strtab(struct hyp_arm_smmu_v3_device *smmu, u32 sid)
 	if (l1_desc->l2ptr)
 		return 0;
 
-	l2table = kvm_iommu_donate_pages(get_order(sizeof(*l2table)));
+	l2table = kvm_iommu_donate_pages_atomic(get_order(sizeof(*l2table)));
 	if (!l2table)
 		return -ENOMEM;
 
