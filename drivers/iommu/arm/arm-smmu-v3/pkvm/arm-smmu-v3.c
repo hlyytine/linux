@@ -201,15 +201,19 @@ static void smmu_tlb_inv_range(struct hyp_arm_smmu_v3_domain *smmu_domain, unsig
 			       size_t size, size_t granule, bool leaf)
 {
 	struct kvm_hyp_iommu_domain *domain = smmu_domain->domain;
-	struct arm_smmu_cmdq_ent cmd = {
-		.opcode = CMDQ_OP_TLBI_S2_IPA,
-		.tlbi = {
-			.leaf = leaf,
-			.vmid = domain->domain_id,
-		},
-	};
+	struct arm_smmu_cmdq_ent cmd;
 	struct domain_iommu_node *iommu_node;
 	struct io_pgtable_cfg *cfg = &smmu_domain->pgtable->cfg;
+
+	cmd.tlbi.leaf = leaf;
+	if (cfg->fmt == ARM_64_LPAE_S2) {
+		cmd.opcode = CMDQ_OP_TLBI_S2_IPA;
+		cmd.tlbi.vmid = domain->domain_id;
+	} else {
+		cmd.opcode = CMDQ_OP_TLBI_NH_VA;
+		cmd.tlbi.asid = domain->domain_id;
+		cmd.tlbi.vmid = 0;
+	}
 
 	for_each_smmu_in_domain(smmu_domain, iommu_node) {
 		struct hyp_arm_smmu_v3_device *smmu = iommu_node->smmu;
@@ -229,7 +233,10 @@ static void smmu_tlb_add_page(struct iommu_iotlb_gather *gather,
 			      unsigned long iova, size_t granule,
 			      void *cookie)
 {
-	smmu_tlb_inv_range(cookie, iova, granule, granule, true);
+	if (gather)
+		kvm_iommu_iotlb_gather_add_page(cookie, gather, iova, granule);
+	else
+		smmu_tlb_inv_range(cookie, iova, granule, granule, true);
 }
 
 static void smmu_inv_domain(struct hyp_arm_smmu_v3_device *smmu,
@@ -238,16 +245,48 @@ static void smmu_inv_domain(struct hyp_arm_smmu_v3_device *smmu,
 	struct kvm_hyp_iommu_domain *domain = smmu_domain->domain;
 	struct arm_smmu_cmdq_ent cmd = {};
 
-	cmd.opcode = CMDQ_OP_TLBI_S12_VMALL;
-	cmd.tlbi.vmid = domain->domain_id;
+	if (smmu_domain->pgtable->cfg.fmt == ARM_64_LPAE_S2) {
+		cmd.opcode = CMDQ_OP_TLBI_S12_VMALL;
+		cmd.tlbi.vmid = domain->domain_id;
+	} else {
+		cmd.opcode = CMDQ_OP_TLBI_NH_ASID;
+		cmd.tlbi.asid = domain->domain_id;
+	}
 
 	WARN_ON(smmu_send_cmd(smmu, &cmd));
 }
 
+static void smmu_tlb_flush_all(void *cookie)
+{
+	struct hyp_arm_smmu_v3_domain *smmu_domain = cookie;
+	struct domain_iommu_node *iommu_node;
+
+	for_each_smmu_in_domain(smmu_domain, iommu_node) {
+		struct hyp_arm_smmu_v3_device *smmu = iommu_node->smmu;
+
+		hyp_spin_lock(&smmu->lock);
+		smmu_inv_domain(smmu, smmu_domain);
+		hyp_spin_unlock(&smmu->lock);
+	}
+}
+
 static const struct iommu_flush_ops smmu_tlb_ops = {
+	.tlb_flush_all	= smmu_tlb_flush_all,
 	.tlb_flush_walk = smmu_tlb_flush_walk,
 	.tlb_add_page	= smmu_tlb_add_page,
 };
+
+static void smmu_iotlb_sync(struct kvm_hyp_iommu_domain *domain,
+			    struct iommu_iotlb_gather *gather)
+{
+	size_t size;
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+
+	if (!gather->pgsize)
+		return;
+	size = gather->end - gather->start + 1;
+	smmu_tlb_inv_range(smmu_domain, gather->start, size,  gather->pgsize, true);
+}
 
 static int smmu_sync_ste(struct hyp_arm_smmu_v3_device *smmu, u32 sid)
 {
@@ -988,4 +1027,5 @@ struct kvm_iommu_ops smmu_ops = {
 	.dabt_handler			= smmu_dabt_handler,
 	.alloc_domain			= smmu_alloc_domain,
 	.free_domain			= smmu_free_domain,
+	.iotlb_sync			= smmu_iotlb_sync,
 };
