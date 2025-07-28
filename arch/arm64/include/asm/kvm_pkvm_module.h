@@ -134,8 +134,8 @@ enum pkvm_psci_notification {
  * @hyp_va:			Convert a physical address into a virtual one.
  * @kern_hyp_va:		Convert a kernel virtual address into an
  *				hypervisor virtual one.
- * @iommu_donate_pages:		Allocate pages from the IOMMU pool.
- * @iommu_reclaim_pages:	Reclaim pages to the IOMMU pool.
+ * @iommu_donate_pages_atomic:		Allocate pages from the IOMMU pool from atomic pool.
+ * @iommu_reclaim_pages_atomic:	Reclaim pages to the IOMMU pool from atomic pool.
  * @get_time:			Get time in us, typically used to track intervals.
  * @host_donate_hyp_prot:	Donate pages to hyp with prot.
  */
@@ -182,8 +182,8 @@ struct pkvm_module_ops {
 	void* (*tracing_reserve_entry)(unsigned long length);
 	void (*tracing_commit_entry)(void);
 	void (*tracing_mod_hyp_printk)(u8 fmt_id, u64 a, u64 b, u64 c, u64 d);
-	void *(*iommu_donate_pages)(u8 order);
-	void (*iommu_reclaim_pages)(void *p);
+	void *(*iommu_donate_pages_atomic)(u8 order);
+	void (*iommu_reclaim_pages_atomic)(void *p);
 	u64 (*get_time)(void);
 	int (*host_donate_hyp_prot)(u64 pfn, u64 nr_pages,
 				    bool accept_mmio,

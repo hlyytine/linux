@@ -15,8 +15,8 @@ int kvm_iommu_init(void *pool_base, size_t nr_pages, struct kvm_iommu_ops *ops);
 
 void kvm_iommu_host_stage2_idmap(phys_addr_t start, phys_addr_t end,
 				 enum kvm_pgtable_prot prot);
-void *kvm_iommu_donate_pages(u8 order);
-void kvm_iommu_reclaim_pages(void *ptr);
+void *kvm_iommu_donate_pages_atomic(u8 order);
+void kvm_iommu_reclaim_pages_atomic(void *ptr);
 bool kvm_iommu_host_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr);
 
 /* Hypercall handlers */

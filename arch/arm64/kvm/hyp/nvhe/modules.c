@@ -257,8 +257,8 @@ const struct pkvm_module_ops module_ops = {
 	.tracing_reserve_entry = tracing_reserve_entry,
 	.tracing_commit_entry = tracing_commit_entry,
 	.tracing_mod_hyp_printk = tracing_mod_hyp_printk,
-	.iommu_donate_pages = kvm_iommu_donate_pages,
-	.iommu_reclaim_pages = kvm_iommu_reclaim_pages,
+	.iommu_donate_pages_atomic = kvm_iommu_donate_pages_atomic,
+	.iommu_reclaim_pages_atomic = kvm_iommu_reclaim_pages_atomic,
 	.get_time = pkvm_time_get,
 	.host_donate_hyp_prot = ___pkvm_host_donate_hyp_prot,
 };
