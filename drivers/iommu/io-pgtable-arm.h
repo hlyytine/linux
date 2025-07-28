@@ -197,6 +197,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 					    void *cookie,
 					    enum io_pgtable_fmt fmt,
 					    int *out_ret);
+int kvm_arm_io_pgtable_free(struct io_pgtable *iopt);
 #else
 #define __arm_lpae_virt_to_phys	__pa
 #define __arm_lpae_phys_to_virt	__va

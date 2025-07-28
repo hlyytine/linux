@@ -81,6 +81,8 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	data->iop.ops = (struct io_pgtable_ops) {
 		.map_pages	= arm_lpae_map_pages,
 		.unmap_pages	= arm_lpae_unmap_pages,
+		.iova_to_phys	= arm_lpae_iova_to_phys,
+		.pgtable_walk	= arm_lpae_pgtable_walk,
 	};
 
 	ret = kvm_arm_io_pgtable_init(cfg, fmt, data, cookie);
@@ -112,4 +114,18 @@ out_free:
 	kvm_iommu_reclaim_pages_atomic(data);
 	*out_ret = ret;
 	return NULL;
+}
+
+int kvm_arm_io_pgtable_free(struct io_pgtable *iopt)
+{
+	struct arm_lpae_io_pgtable *data = io_pgtable_to_data(iopt);
+	size_t pgd_size = ARM_LPAE_PGD_SIZE(data);
+
+	if (!data->iop.cfg.coherent_walk)
+		kvm_flush_dcache_to_poc(data->pgd, pgd_size);
+
+	io_pgtable_tlb_flush_all(iopt);
+	__arm_lpae_free_pgtable(data, data->start_level, data->pgd);
+	kvm_iommu_reclaim_pages_atomic(data);
+	return 0;
 }
