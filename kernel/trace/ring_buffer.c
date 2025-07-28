@@ -2545,7 +2545,7 @@ struct trace_buffer *__ring_buffer_alloc(unsigned long size, unsigned flags,
 					 struct ring_buffer_writer *writer)
 {
 	/* Default buffer page size - one system page */
-	return alloc_buffer(size, flags, 0, 0, 0,key);
+	return alloc_buffer(size, flags, 0, 0, 0, 0, key, writer);
 
 }
 EXPORT_SYMBOL_GPL(__ring_buffer_alloc);
@@ -2571,7 +2571,8 @@ struct trace_buffer *__ring_buffer_alloc_range(unsigned long size, unsigned flag
 					       unsigned long scratch_size,
 					       struct lock_class_key *key)
 {
-	return alloc_buffer(size, flags, order, start, start + range_size, key);
+	return alloc_buffer(size, flags, order, start, start + range_size,
+			    scratch_size, key, NULL);
 }
 
 void *ring_buffer_meta_scratch(struct trace_buffer *buffer, unsigned int *size)
