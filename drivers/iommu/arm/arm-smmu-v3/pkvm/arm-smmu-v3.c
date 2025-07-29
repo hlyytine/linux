@@ -986,6 +986,54 @@ static int smmu_detach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *dom
 		goto out_ret;
 	}
 
+	/*
+	 * For stage-1:
+	 * - The kernel has to detach pasid = 0 the last.
+	 * - This will free the CD.
+	 */
+	if (smmu_domain->type == KVM_ARM_SMMU_DOMAIN_S1) {
+		u32 pasid_bits = 0;
+		u64 *cd_table, *cd;
+
+		pasid_bits = FIELD_GET(STRTAB_STE_0_S1CDMAX, ste->data[0]);
+		if (pasid >= (1 << pasid_bits)) {
+			ret = -E2BIG;
+			goto out_ret;
+		}
+		cd_table = (u64 *)(ste->data[0] & STRTAB_STE_0_S1CTXPTR_MASK);
+		if (WARN_ON(!cd_table)) {
+			ret = -ENODEV;
+			goto out_ret;
+		}
+
+		cd_table = hyp_phys_to_virt((phys_addr_t)cd_table);
+		if (pasid == 0) {
+			int j;
+
+			/* Ensure other pasids are detached. */
+			for (j = 1 ; j < (1 << pasid_bits) ; ++j) {
+				cd = smmu_get_cd_ptr(cd_table, j);
+				if (cd[0] & CTXDESC_CD_0_V) {
+					ret = -EINVAL;
+					goto out_ret;
+				}
+			}
+
+			smmu_free_cd(cd_table, pasid_bits);
+		} else {
+			cd = smmu_get_cd_ptr(cd_table, pasid);
+			cd[0] = 0;
+			smmu_sync_cd(smmu, dev, pasid);
+			cd[1] = 0;
+			cd[2] = 0;
+			cd[3] = 0;
+			ret = smmu_sync_cd(smmu, dev, pasid);
+			smmu_put_ref_domain(smmu, smmu_domain);
+			goto out_ret;
+		}
+	}
+
+	/* For stage-2 and pasid = 0 */
 	WRITE_ONCE(ste->data[0], 0);
 	smmu_sync_ste(smmu, dev);
 	WRITE_ONCE(ste->data[1], 0);
