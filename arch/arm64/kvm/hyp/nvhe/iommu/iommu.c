@@ -99,7 +99,7 @@ static int __snapshot_host_stage2(const struct kvm_pgtable_visit_ctx *ctx,
 	return 0;
 }
 
-static int kvm_iommu_snapshot_host_stage2(void)
+int kvm_iommu_snapshot_host_stage2(void)
 {
 	int ret;
 	struct kvm_pgtable_walker walker = {
@@ -136,10 +136,7 @@ int kvm_iommu_init(void *pool_base, size_t nr_pages)
 	if (ret)
 		return ret;
 
-	ret = kvm_iommu_ops->init();
-	if (ret)
-		return ret;
-	return kvm_iommu_snapshot_host_stage2();
+	return kvm_iommu_ops->init();
 }
 
 void kvm_iommu_host_stage2_idmap(phys_addr_t start, phys_addr_t end,

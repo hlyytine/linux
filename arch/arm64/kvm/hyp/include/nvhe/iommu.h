@@ -72,6 +72,7 @@ void kvm_iommu_reclaim_pages(void *p, u8 order);
 void kvm_iommu_iotlb_gather_add_page(struct kvm_hyp_iommu_domain *domain,
 				     struct iommu_iotlb_gather *gather,
 				     unsigned long iova, size_t size);
+int kvm_iommu_snapshot_host_stage2(void);
 
 extern struct hyp_mgt_allocator_ops kvm_iommu_allocator_ops;
 

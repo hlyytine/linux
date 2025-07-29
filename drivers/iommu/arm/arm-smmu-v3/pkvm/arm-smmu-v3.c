@@ -628,7 +628,7 @@ static int smmu_init_pgt(void)
 		return -EINVAL;
 
 	idmap_pgtable = kvm_arm_io_pgtable_alloc(&cfg, NULL, ARM_64_LPAE_S2, &ret);
-	return ret;
+	return kvm_iommu_snapshot_host_stage2();
 }
 
 static int smmu_init(void)
