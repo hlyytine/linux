@@ -312,14 +312,12 @@ static int smmu_sync_cd(struct hyp_arm_smmu_v3_device *smmu, u32 sid, u32 ssid)
 	return smmu_send_cmd(smmu, &cmd);
 }
 
-__maybe_unused
 static u64 *smmu_get_cd_ptr(u64 *cdtab, u32 ssid)
 {
 	/* Only linear supported for now. */
 	return cdtab + ssid * CTXDESC_CD_DWORDS;
 }
 
-__maybe_unused
 static u64 *smmu_alloc_cd(struct hyp_arm_smmu_v3_device *smmu, u32 pasid_bits)
 {
 	u64 *cd_table;
@@ -689,6 +687,102 @@ static void smmu_init_s2_ste(struct hyp_arm_smmu_v3_domain *smmu_domain,
 	ste->data[3] = cfg->arm_lpae_s2_cfg.vttbr & STRTAB_STE_3_S2TTB_MASK;
 }
 
+static u64 *smmu_domain_config_s1_ste(struct hyp_arm_smmu_v3_device *smmu,
+				      u32 pasid_bits, struct arm_smmu_ste *ste)
+{
+	u64 *cd_table;
+
+	cd_table = smmu_alloc_cd(smmu, pasid_bits);
+	if (!cd_table)
+		return NULL;
+
+	ste->data[1] = FIELD_PREP(STRTAB_STE_1_S1DSS, STRTAB_STE_1_S1DSS_SSID0) |
+		FIELD_PREP(STRTAB_STE_1_S1CIR, STRTAB_STE_1_S1C_CACHE_WBRA) |
+		FIELD_PREP(STRTAB_STE_1_S1COR, STRTAB_STE_1_S1C_CACHE_WBRA) |
+		FIELD_PREP(STRTAB_STE_1_S1CSH, ARM_SMMU_SH_ISH);
+	ste->data[0] = ((u64)cd_table & STRTAB_STE_0_S1CTXPTR_MASK) |
+		FIELD_PREP(STRTAB_STE_0_CFG, STRTAB_STE_0_CFG_S1_TRANS) |
+		FIELD_PREP(STRTAB_STE_0_S1CDMAX, pasid_bits) |
+		FIELD_PREP(STRTAB_STE_0_S1FMT, STRTAB_STE_0_S1FMT_LINEAR) |
+		STRTAB_STE_0_V;
+
+	return cd_table;
+}
+
+/*
+ * This function handles configuration for pasid and non-pasid domains
+ * with the following assumptions:
+ * - pasid 0 always attached first, this should be the typicall flow
+ *   for the kernel where attach_dev is always called before set_dev_pasid.
+ *   In that case only pasid 0 is allowed to allocate memory for the CD,
+ *   and other pasids would expect to find the tabel.
+ * - pasid 0 is detached last, also guaranteed from the kernel.
+ */
+static int smmu_domain_config_s1(struct hyp_arm_smmu_v3_device *smmu,
+				 struct kvm_hyp_iommu_domain *domain,
+				 u32 sid, u32 pasid, u32 pasid_bits,
+				 struct arm_smmu_ste *ste)
+{
+	struct arm_smmu_ste *dst;
+	u64 val;
+	u64 *cd_entry, *cd_table;
+	struct io_pgtable_cfg *cfg;
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+
+	cfg = &smmu_domain->pgtable->cfg;
+	dst = smmu_get_ste_ptr(smmu, sid);
+	val = dst->data[0];
+
+	if (FIELD_GET(STRTAB_STE_0_CFG, val) == STRTAB_STE_0_CFG_S2_TRANS)
+		return -EBUSY;
+
+	if (pasid == 0) {
+		cd_table = smmu_domain_config_s1_ste(smmu, pasid_bits, ste);
+		if (!cd_table)
+			return -ENOMEM;
+	} else {
+		u32 nr_entries;
+
+		cd_table = (u64 *)(FIELD_GET(STRTAB_STE_0_S1CTXPTR_MASK, val) << 6);
+		if (!cd_table)
+			return -EINVAL;
+		nr_entries = 1 << FIELD_GET(STRTAB_STE_0_S1CDMAX, val);
+		if (pasid >= nr_entries)
+			return -E2BIG;
+	}
+
+	/* Write CD. */
+	cd_entry = smmu_get_cd_ptr(hyp_phys_to_virt((u64)cd_table), pasid);
+
+	/* CD already used by another device. */
+	if (cd_entry[0])
+		return -EBUSY;
+
+	cd_entry[1] = cpu_to_le64(cfg->arm_lpae_s1_cfg.ttbr & CTXDESC_CD_1_TTB0_MASK);
+	cd_entry[2] = 0;
+	cd_entry[3] = cpu_to_le64(cfg->arm_lpae_s1_cfg.mair);
+
+	/* STE is live. */
+	if (pasid)
+		smmu_sync_cd(smmu, sid, pasid);
+	val =  FIELD_PREP(CTXDESC_CD_0_TCR_T0SZ, cfg->arm_lpae_s1_cfg.tcr.tsz) |
+	       FIELD_PREP(CTXDESC_CD_0_TCR_TG0, cfg->arm_lpae_s1_cfg.tcr.tg) |
+	       FIELD_PREP(CTXDESC_CD_0_TCR_IRGN0, cfg->arm_lpae_s1_cfg.tcr.irgn) |
+	       FIELD_PREP(CTXDESC_CD_0_TCR_ORGN0, cfg->arm_lpae_s1_cfg.tcr.orgn) |
+	       FIELD_PREP(CTXDESC_CD_0_TCR_SH0, cfg->arm_lpae_s1_cfg.tcr.sh) |
+	       FIELD_PREP(CTXDESC_CD_0_TCR_IPS, cfg->arm_lpae_s1_cfg.tcr.ips) |
+	       CTXDESC_CD_0_TCR_EPD1 | CTXDESC_CD_0_AA64 |
+	       CTXDESC_CD_0_R | CTXDESC_CD_0_A |
+	       CTXDESC_CD_0_ASET |
+	       FIELD_PREP(CTXDESC_CD_0_ASID, domain->domain_id) |
+	       CTXDESC_CD_0_V;
+	WRITE_ONCE(cd_entry[0], cpu_to_le64(val));
+	/* STE is live. */
+	if (pasid)
+		smmu_sync_cd(smmu, sid, pasid);
+	return 0;
+}
+
 static bool smmu_domain_compat(struct hyp_arm_smmu_v3_device *smmu,
 			       struct hyp_arm_smmu_v3_domain *smmu_domain)
 {
@@ -753,19 +847,38 @@ static void smmu_put_ref_domain(struct hyp_arm_smmu_v3_device *smmu,
 	}
 }
 
-static int smmu_init_pgt(struct hyp_arm_smmu_v3_domain *smmu_domain,
-			 struct hyp_arm_smmu_v3_device *smmu)
+static int smmu_domain_finalise(struct hyp_arm_smmu_v3_domain *smmu_domain,
+				struct hyp_arm_smmu_v3_device *smmu)
 {
-	struct io_pgtable_cfg cfg = (struct io_pgtable_cfg) {
-		.tlb = &smmu_tlb_ops,
-		.pgsize_bitmap = smmu->pgsize_bitmap,
-		.ias = smmu->ias,
-		.oas = smmu->oas,
-		.coherent_walk = smmu->features & ARM_SMMU_FEAT_COHERENCY,
-	};
+	struct io_pgtable_cfg cfg;
 	int ret = 0;
 
-	smmu_domain->pgtable = kvm_arm_io_pgtable_alloc(&cfg, smmu_domain, ARM_64_LPAE_S2, &ret);
+	if (smmu_domain->type == KVM_ARM_SMMU_DOMAIN_S1) {
+		size_t ias = (smmu->features & ARM_SMMU_FEAT_VAX) ? 52 : 48;
+
+		cfg = (struct io_pgtable_cfg) {
+			.fmt = ARM_64_LPAE_S1,
+			.pgsize_bitmap = smmu->pgsize_bitmap,
+			.ias = min_t(unsigned long, ias, VA_BITS),
+			.oas = smmu->ias,
+			.coherent_walk = smmu->features & ARM_SMMU_FEAT_COHERENCY,
+			.tlb = &smmu_tlb_ops,
+		};
+	} else {
+		cfg = (struct io_pgtable_cfg) {
+			.fmt = ARM_64_LPAE_S2,
+			.pgsize_bitmap = smmu->pgsize_bitmap,
+			.ias = smmu->ias,
+			.oas = smmu->oas,
+			.coherent_walk = smmu->features & ARM_SMMU_FEAT_COHERENCY,
+			.tlb = &smmu_tlb_ops,
+		};
+	}
+
+	hyp_spin_lock(&smmu_domain->pgt_lock);
+	smmu_domain->pgtable = kvm_arm_io_pgtable_alloc(&cfg, smmu_domain, cfg.fmt, &ret);
+	hyp_spin_unlock(&smmu_domain->pgt_lock);
+
 	return ret;
 }
 
@@ -776,7 +889,7 @@ static int smmu_attach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *dom
 	struct hyp_arm_smmu_v3_device *smmu = smmu_id_to_ptr(iommu);
 	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
 	struct domain_iommu_node *iommu_node = NULL;
-	int ret;
+	int ret = 0;
 
 	if (!smmu)
 		return -ENODEV;
@@ -805,15 +918,38 @@ static int smmu_attach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *dom
 	}
 
 	if (!smmu_domain->pgtable) {
-		ret = smmu_init_pgt(smmu_domain, smmu);
+		ret = smmu_domain_finalise(smmu_domain, smmu);
 		if (ret)
 			goto out_ret;
-		idmap_pgtable = smmu_domain->pgtable;
-		ret =  kvm_iommu_snapshot_host_stage2();
-		if (ret)
-			goto out_ret;
+		if (is_idmap_domain(domain)) {
+			idmap_pgtable = smmu_domain->pgtable;
+			ret = kvm_iommu_snapshot_host_stage2();
+			if (ret)
+				goto out_ret;
+		}
 	}
-	smmu_init_s2_ste(smmu_domain, &target);
+
+	if ((smmu_domain->type == KVM_ARM_SMMU_DOMAIN_S2) ||
+	   (smmu_domain->type == KVM_ARM_SMMU_DOMAIN_BYPASS)) {
+		/* Device already attached or pasid for s2. */
+		if (ste->data[0] || pasid) {
+			ret = -EBUSY;
+			goto out_ret;
+		}
+		smmu_init_s2_ste(smmu_domain, &target);
+	} else {
+		/*
+		 * Allocate and config CD, and update CD if possible.
+		 */
+		pasid_bits = min(pasid_bits, smmu->ssid_bits);
+		ret = smmu_domain_config_s1(smmu, domain, dev, pasid,
+					    pasid_bits, &target);
+	}
+
+	/* We don't update STEs for pasid domains. */
+	if (ret || pasid)
+		goto out_ret;
+
 	WRITE_ONCE(ste->data[1], target.data[1]);
 	WRITE_ONCE(ste->data[2], target.data[2]);
 	WRITE_ONCE(ste->data[3], target.data[3]);

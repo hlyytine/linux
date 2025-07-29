@@ -26,6 +26,7 @@
  * @pgsize_bitmap	Pages sizes supported by the SMMUv3
  * Other members are filled and used at runtime by the SMMU driver.
  * @lock		Lock to protect the SMMU resources (STE/CMDQ)
+ * @ssid_bits		Number of bits supported for SSID (PASID)
  */
 struct hyp_arm_smmu_v3_device {
 	phys_addr_t		mmio_addr;
@@ -46,6 +47,7 @@ struct hyp_arm_smmu_v3_device {
 #endif
 	struct kvm_power_domain	power_domain;
 	bool			power_is_off;
+	u32			ssid_bits;
 };
 
 extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v3_count);
