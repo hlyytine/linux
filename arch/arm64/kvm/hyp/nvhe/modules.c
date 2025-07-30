@@ -7,6 +7,8 @@
 #include <asm/kvm_hypevents.h>
 #include <asm/module.h>
 
+#include <nvhe/alloc.h>
+#include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/modules.h>
 #include <nvhe/mm.h>
@@ -216,6 +218,10 @@ bool module_handle_guest_smc(struct arm_smccc_1_2_regs *regs, struct arm_smccc_1
 
 	return false;
 }
+	static int __hyp_smp_processor_id(void)
+{
+	return hyp_smp_processor_id();
+}
 
 const struct pkvm_module_ops module_ops = {
 	.create_private_mapping = __pkvm_create_private_mapping,
@@ -243,6 +249,8 @@ const struct pkvm_module_ops module_ops = {
 	.register_hyp_panic_notifier = __pkvm_register_hyp_panic_notifier,
 	.register_unmask_serror = __pkvm_register_unmask_serror,
 	.host_donate_hyp = __pkvm_module_host_donate_hyp,
+	.host_donate_hyp_mmio = ___pkvm_host_donate_hyp,
+	.host_donate_hyp_prot = ___pkvm_host_donate_hyp_prot,
 	.hyp_donate_host = __pkvm_hyp_donate_host,
 	.host_share_hyp = __pkvm_host_share_hyp,
 	.host_unshare_hyp = __pkvm_host_unshare_hyp,
@@ -256,6 +264,25 @@ const struct pkvm_module_ops module_ops = {
 	.tracing_reserve_entry = tracing_reserve_entry,
 	.tracing_commit_entry = tracing_commit_entry,
 	.tracing_mod_hyp_printk = tracing_mod_hyp_printk,
+	.hyp_alloc = hyp_alloc,
+	.hyp_alloc_errno = hyp_alloc_errno,
+	.hyp_free = hyp_free,
+	.hyp_alloc_missing_donations = hyp_alloc_missing_donations,
+	.iommu_donate_pages = kvm_iommu_donate_pages,
+	.iommu_reclaim_pages = kvm_iommu_reclaim_pages,
+	.get_time = pkvm_time_get,
+	.iommu_iotlb_gather_add_page = kvm_iommu_iotlb_gather_add_page,
+	.pkvm_unuse_dma = __pkvm_host_use_dma,
+	.pkvm_use_dma = __pkvm_host_unuse_dma,
+#ifdef CONFIG_LIST_HARDENED
+	.list_add_valid_or_report = __list_add_valid_or_report,
+	.list_del_entry_valid_or_report = __list_del_entry_valid_or_report,
+#endif
+	.iommu_snapshot_host_stage2 = kvm_iommu_snapshot_host_stage2,
+	.iommu_donate_pages_atomic = kvm_iommu_donate_pages_atomic,
+	.iommu_reclaim_pages_atomic = kvm_iommu_reclaim_pages_atomic,
+	.init_hvc_pd = pkvm_init_hvc_pd,
+	.hyp_smp_processor_id = __hyp_smp_processor_id,
 };
 
 static void *pkvm_module_hyp_va(struct pkvm_el2_module *mod, void *kern_va)

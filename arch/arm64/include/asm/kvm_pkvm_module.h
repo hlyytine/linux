@@ -9,6 +9,11 @@
 
 typedef void (*dyn_hcall_t)(struct user_pt_regs *);
 
+struct iommu_iotlb_gather;
+struct kvm_hyp_iommu_domain;
+struct kvm_power_domain;
+struct kvm_power_domain_ops;
+
 #ifdef CONFIG_MODULES
 enum pkvm_psci_notification {
 	PKVM_PSCI_CPU_SUSPEND,
@@ -112,6 +117,10 @@ enum pkvm_psci_notification {
  *				is called before remasking SErrors.
  * @host_donate_hyp:		The page @pfn is unmapped from the host and
  *				full control is given to the hypervisor.
+ * @host_donate_hyp_mmio:	Similar to host_donate_hyp but can accept mmio if
+ * 				is true passed.
+ * @host_donate_hyp_prot:	Similar to hyp_donate_host_mmio by also accept prot.
+
  * @hyp_donate_host:		The page @pfn whom control has previously been
  *				given to the hypervisor (@host_donate_hyp) is
  *				given back to the host.
@@ -134,6 +143,33 @@ enum pkvm_psci_notification {
  * @hyp_va:			Convert a physical address into a virtual one.
  * @kern_hyp_va:		Convert a kernel virtual address into an
  *				hypervisor virtual one.
+ * @hyp_alloc:			Allocate memory in hyp VA space.
+ * @hyp_alloc_errno:		Error in case hyp_alloc() returns NULL.
+ * @hyp_free:			Free memory allocated  from hyp_alloc().
+ * @iommu_donate_pages:		Allocate memory from IOMMU pool.
+ * @iommu_reclaim_pages:	Reclaim memory from iommu_donate_pages()
+ * @get_time:			get time in us.
+ * @hyp_alloc_missing_donations:
+ *				Missing donations if allocator returns NULL
+ * @iommu_iotlb_gather_add_page:
+ *				Add an IOVA range to an iommu_iotlb_gather.
+ * @pkvm_unuse_dma:		Decrement the refcount for pages used for DMA,
+ * 				this is typically called from the module after a
+ * 				successful unmap() operation, so the hypervisor
+ * 				can track the page state.
+  * @pkvm_use_dma:		Increment the refcount for pages used for DMA,
+ * 				this is typically called from the module after a
+ * 				successful map() operation, so the hypervisor
+ * 				can track the page state.
+ * @init_hvc_pd:		Register a power domain ops.
+ * @iommu_snapshot_host_stage2: Snapshot the host stage-2 CPU page table in to an
+ * 				IOMMU domain.
+ * @__list_add_valid_or_report: Needed if the code uses linked lists.
+ * @__list_del_entry_valid_or_report:
+				Needed if the code uses linked lists.
+ * @iommu_donate_pages_atomic:	Allocate memory from IOMMU identity pool.
+ * @iommu_reclaim_pages_atomic:	Reclaim memory from iommu_donate_pages_atomic()
+ * @hyp_smp_processor_id:	Current CPU id
  */
 struct pkvm_module_ops {
 	int (*create_private_mapping)(phys_addr_t phys, size_t size,
@@ -165,6 +201,8 @@ struct pkvm_module_ops {
 	int (*register_hyp_panic_notifier)(void (*cb)(struct user_pt_regs *));
 	int (*register_unmask_serror)(bool (*unmask)(void), void (*mask)(void));
 	int (*host_donate_hyp)(u64 pfn, u64 nr_pages);
+	int (*host_donate_hyp_mmio)(u64 pfn, u64 nr_pages, bool accept_mmio);
+	int (*host_donate_hyp_prot)(u64 pfn, u64 nr_pages, bool accept_mmio, enum kvm_pgtable_prot prot);
 	int (*hyp_donate_host)(u64 pfn, u64 nr_pages);
 	int (*host_share_hyp)(u64 pfn);
 	int (*host_unshare_hyp)(u64 pfn);
@@ -178,7 +216,29 @@ struct pkvm_module_ops {
 	void* (*tracing_reserve_entry)(unsigned long length);
 	void (*tracing_commit_entry)(void);
 	void (*tracing_mod_hyp_printk)(u8 fmt_id, u64 a, u64 b, u64 c, u64 d);
-
+	void * (*hyp_alloc)(size_t size);
+	int (*hyp_alloc_errno)(void);
+	void (*hyp_free)(void *addr);
+	u8 (*hyp_alloc_missing_donations)(void);
+	void * (*iommu_donate_pages)(u8 order, int flags);
+	void (*iommu_reclaim_pages)(void *p, u8 order);
+	u64 (*get_time)(void);
+	void (*iommu_iotlb_gather_add_page)(struct kvm_hyp_iommu_domain *domain,
+					    struct iommu_iotlb_gather *gather,
+					    unsigned long iova,
+					    size_t size);
+	int (*pkvm_unuse_dma)(phys_addr_t phys_addr, size_t size);
+	int (*pkvm_use_dma)(phys_addr_t phys_addr, size_t size);
+	int (*init_hvc_pd)(struct kvm_power_domain *pd, const struct kvm_power_domain_ops *ops);
+#ifdef CONFIG_LIST_HARDENED
+	/* These 2 functions change calling convention based on CONFIG_DEBUG_LIST. */
+	typeof(__list_add_valid_or_report) *list_add_valid_or_report;
+	typeof(__list_del_entry_valid_or_report) *list_del_entry_valid_or_report;
+#endif
+	int (*iommu_snapshot_host_stage2)(void);
+	void * (*iommu_donate_pages_atomic)(u8 order);
+	void (*iommu_reclaim_pages_atomic)(void *p);
+	int (*hyp_smp_processor_id)(void);
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
