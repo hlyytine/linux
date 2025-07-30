@@ -230,6 +230,8 @@ static struct iommu_device *kvm_arm_smmu_probe_device(struct device *dev)
 	master->smmu = smmu;
 	dev_iommu_priv_set(dev, master);
 	master->idmapped = device_property_read_bool(dev, "iommu-idmapped");
+	device_property_read_u32(dev, "pasid-num-bits", &master->ssid_bits);
+	master->ssid_bits = min(smmu->ssid_bits, master->ssid_bits);
 
 	ret = arm_smmu_insert_master(smmu, master, false);
 	if (ret)
@@ -246,32 +248,31 @@ static struct iommu_device *kvm_arm_smmu_probe_device(struct device *dev)
 	return ERR_PTR(ret);
 }
 
-static void kvm_arm_smmu_detach_dev(struct device *dev)
+static void kvm_arm_smmu_detach_dev_pasid(struct device *dev,
+					  struct iommu_domain *domain,
+					  ioasid_t pasid)
 {
 	int i;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(master->smmu);
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
-	struct kvm_arm_smmu_domain *kvm_smmu_domain;
+	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
 
-	if (!domain)
-		return;
-
-	kvm_smmu_domain = to_kvm_smmu_domain(domain);
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
 		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
-				  kvm_smmu_domain->id, sid, 0);
+				  kvm_smmu_domain->id, sid, pasid);
 	}
 }
 
 static void kvm_arm_smmu_release_device(struct device *dev)
 {
 	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 
-	kvm_arm_smmu_detach_dev(dev);
+	if (domain)
+		kvm_arm_smmu_detach_dev_pasid(dev, domain, 0);
 	arm_smmu_remove_master(master);
 }
 
@@ -434,8 +435,9 @@ out:
 	return ret;
 }
 
-static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
-				   struct device *dev)
+static int kvm_arm_smmu_attach_dev_pasid(struct iommu_domain *domain,
+					 struct device *dev, ioasid_t pasid,
+					 struct iommu_domain *old)
 {
 	int i, ret = 0;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
@@ -443,7 +445,8 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(master->smmu);
 	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
 
-	kvm_arm_smmu_detach_dev(dev);
+	if (old)
+		kvm_arm_smmu_detach_dev_pasid(dev, old, pasid);
 
 	mutex_lock(&kvm_smmu_domain->init_mutex);
 	ret = kvm_arm_smmu_domain_finalize(kvm_smmu_domain, master);
@@ -455,7 +458,7 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 		int sid = fwspec->ids[i];
 
 		ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_attach_dev, host_smmu->id,
-					   kvm_smmu_domain->id, sid, 0, 0, 0);
+					   kvm_smmu_domain->id, sid, pasid, master->ssid_bits, 0);
 		if (ret)
 			goto out_err;
 	}
@@ -463,11 +466,18 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 out_err:
 	while (i--)
 		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
-				  kvm_smmu_domain->id, fwspec->ids[i], 0);
+				  kvm_smmu_domain->id, fwspec->ids[i], pasid);
 
 	return ret;
 }
 
+static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
+				   struct device *dev)
+{
+	struct iommu_domain *old = iommu_get_domain_for_dev(dev);
+
+	return kvm_arm_smmu_attach_dev_pasid(domain, dev, 0, old);
+}
 static struct iommu_domain *kvm_arm_smmu_domain_alloc(unsigned type)
 {
 	struct kvm_arm_smmu_domain *smmu_domain;
@@ -538,6 +548,7 @@ static struct iommu_ops kvm_arm_smmu_ops = {
 		.map_pages	= kvm_arm_smmu_map_pages,
 		.unmap_pages	= kvm_arm_smmu_unmap_pages,
 		.free		= kvm_arm_smmu_free_domain,
+		.set_dev_pasid	= kvm_arm_smmu_attach_dev_pasid,
 	}
 };
 
@@ -661,6 +672,7 @@ static int kvm_arm_smmu_probe(struct platform_device *pdev)
 	hyp_smmu->mmio_size = size;
 	hyp_smmu->features = smmu->features;
 	hyp_smmu->power_domain = host_smmu->power_domain;
+	hyp_smmu->ssid_bits = smmu->ssid_bits;
 	kvm_arm_smmu_cur++;
 
 	return arm_smmu_register_iommu(smmu, &kvm_arm_smmu_ops, ioaddr);
