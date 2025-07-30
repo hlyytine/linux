@@ -2,9 +2,15 @@
 /*
  * Copyright (C) 2022 Arm Ltd.
  */
+#include <nvhe/alloc.h>
 #include <nvhe/iommu.h>
 
 #include "../../../io-pgtable-arm.h"
+
+#define io_pgtable_cfg_to_pgtable(x) container_of((x), struct io_pgtable, cfg)
+
+#define io_pgtable_cfg_to_data(x)					\
+	io_pgtable_to_data(io_pgtable_cfg_to_pgtable(x))
 
 void arm_lpae_split_blk(void)
 {
@@ -15,11 +21,15 @@ void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
 			     struct io_pgtable_cfg *cfg, void *cookie)
 {
 	void *addr;
+	struct arm_lpae_io_pgtable *data = io_pgtable_cfg_to_data(cfg);
 
 	if (!PAGE_ALIGNED(size))
 		return NULL;
 
-	addr = kvm_iommu_donate_pages_atomic(get_order(size));
+	if (data->idmapped)
+		addr = kvm_iommu_donate_pages_atomic(get_order(size));
+	else
+		addr = kvm_iommu_donate_pages(get_order(size), 0);
 
 	if (addr && !cfg->coherent_walk)
 		kvm_flush_dcache_to_poc(addr, size);
@@ -30,10 +40,15 @@ void *__arm_lpae_alloc_pages(size_t size, gfp_t gfp,
 void __arm_lpae_free_pages(void *addr, size_t size, struct io_pgtable_cfg *cfg,
 			   void *cookie)
 {
+	struct arm_lpae_io_pgtable *data = io_pgtable_cfg_to_data(cfg);
+
 	if (!cfg->coherent_walk)
 		kvm_flush_dcache_to_poc(addr, size);
 
-	kvm_iommu_reclaim_pages_atomic(addr);
+	if (data->idmapped)
+		kvm_iommu_reclaim_pages_atomic(addr);
+	else
+		kvm_iommu_reclaim_pages(addr, get_order(size));
 }
 
 void __arm_lpae_sync_pte(arm_lpae_iopte *ptep, int num_entries,
@@ -72,7 +87,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	struct arm_lpae_io_pgtable *data;
 	int ret;
 
-	data = kvm_iommu_donate_pages_atomic(get_order(sizeof(*data)));
+	data = hyp_alloc(sizeof(*data));
 	if (!data) {
 		*out_ret = -ENOMEM;
 		return NULL;
@@ -111,7 +126,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	*out_ret = 0;
 	return &data->iop;
 out_free:
-	kvm_iommu_reclaim_pages_atomic(data);
+	hyp_free(data);
 	*out_ret = ret;
 	return NULL;
 }
@@ -126,6 +141,6 @@ int kvm_arm_io_pgtable_free(struct io_pgtable *iopt)
 
 	io_pgtable_tlb_flush_all(iopt);
 	__arm_lpae_free_pgtable(data, data->start_level, data->pgd);
-	kvm_iommu_reclaim_pages_atomic(data);
+	hyp_free(data);
 	return 0;
 }

@@ -355,12 +355,15 @@ static int smmu_alloc_l2_strtab(struct hyp_arm_smmu_v3_device *smmu, u32 sid)
 	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
 	struct arm_smmu_strtab_l1 *l1_desc;
 	struct arm_smmu_strtab_l2 *l2table;
+	int flags = 0;
 
 	l1_desc = &cfg->l2.l1tab[arm_smmu_strtab_l1_idx(sid)];
 	if (l1_desc->l2ptr)
 		return 0;
 
-	l2table = kvm_iommu_donate_pages_atomic(get_order(sizeof(*l2table)));
+	if (!(smmu->features & ARM_SMMU_FEAT_COHERENCY))
+		flags |= IOMMU_PAGE_NOCACHE;
+	l2table = kvm_iommu_donate_pages(get_order(sizeof(*l2table)), flags);
 	if (!l2table)
 		return -ENOMEM;
 
@@ -922,7 +925,11 @@ static int smmu_attach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *dom
 		if (ret)
 			goto out_ret;
 		if (is_idmap_domain(domain)) {
+			struct arm_lpae_io_pgtable *data;
+
 			idmap_pgtable = smmu_domain->pgtable;
+			data = io_pgtable_to_data(smmu_domain->pgtable);
+			data->idmapped = true;
 			ret = kvm_iommu_snapshot_host_stage2();
 			if (ret)
 				goto out_ret;
