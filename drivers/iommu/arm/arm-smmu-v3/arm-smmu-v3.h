@@ -262,6 +262,7 @@ struct arm_smmu_master {
 	bool				ats_enabled : 1;
 	bool				ste_ats_enabled : 1;
 	bool				stall_enabled;
+	bool				idmapped;
 	unsigned int			ssid_bits;
 	unsigned int			iopf_refcount;
 };
