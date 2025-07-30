@@ -229,6 +229,7 @@ static struct iommu_device *kvm_arm_smmu_probe_device(struct device *dev)
 	master->dev = dev;
 	master->smmu = smmu;
 	dev_iommu_priv_set(dev, master);
+	master->idmapped = device_property_read_bool(dev, "iommu-idmapped");
 
 	ret = arm_smmu_insert_master(smmu, master, false);
 	if (ret)
@@ -499,7 +500,11 @@ static void kvm_arm_smmu_free_domain(struct iommu_domain *domain)
 
 static int kvm_arm_smmu_def_domain_type(struct device *dev)
 {
-	return IOMMU_DOMAIN_IDENTITY;
+	struct arm_smmu_master *master = dev_iommu_priv_get(dev);
+
+	if (master->idmapped)
+		return IOMMU_DOMAIN_IDENTITY;
+	return 0;
 }
 
 static bool kvm_arm_smmu_capable(struct device *dev, enum iommu_cap cap)
