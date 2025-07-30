@@ -1153,6 +1153,91 @@ static void smmu_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int prot)
 	}
 }
 
+static int smmu_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
+			  phys_addr_t paddr, size_t pgsize,
+			  size_t pgcount, int prot, size_t *total_mapped)
+{
+	size_t mapped;
+	size_t granule;
+	int ret = 0;
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+	struct io_pgtable *pgtable = smmu_domain->pgtable;
+
+	if (unlikely(!pgtable || !domain->domain_id))
+		return -EINVAL;
+
+	granule = 1UL << __ffs(smmu_domain->pgtable->cfg.pgsize_bitmap);
+	if (!IS_ALIGNED(iova | paddr | pgsize, granule))
+		return -EINVAL;
+
+	hyp_spin_lock(&smmu_domain->pgt_lock);
+	while (pgcount) {
+		mapped = 0;
+		ret = pgtable->ops.map_pages(&pgtable->ops, iova, paddr,
+					     pgsize, pgcount, prot, 0, &mapped);
+		if (ret)
+			break;
+		WARN_ON(!IS_ALIGNED(mapped, pgsize));
+		WARN_ON(mapped > pgcount * pgsize);
+
+		pgcount -= mapped / pgsize;
+		*total_mapped += mapped;
+		iova += mapped;
+		paddr += mapped;
+	}
+	hyp_spin_unlock(&smmu_domain->pgt_lock);
+
+	return ret;
+}
+
+static size_t smmu_unmap_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
+			       size_t pgsize, size_t pgcount, struct iommu_iotlb_gather *gather)
+{
+	size_t granule, unmapped, total_unmapped = 0;
+	size_t size = pgsize * pgcount;
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+	struct io_pgtable *pgtable = smmu_domain->pgtable;
+
+	if (unlikely(!pgtable || !domain->domain_id))
+		return -EINVAL;
+
+	granule = 1UL << __ffs(smmu_domain->pgtable->cfg.pgsize_bitmap);
+	if (!IS_ALIGNED(iova | pgsize, granule))
+		return 0;
+
+	hyp_spin_lock(&smmu_domain->pgt_lock);
+	while (total_unmapped < size) {
+		unmapped = pgtable->ops.unmap_pages(&pgtable->ops, iova, pgsize,
+						    pgcount, gather);
+		if (!unmapped)
+			break;
+		iova += unmapped;
+		total_unmapped += unmapped;
+		pgcount -= unmapped / pgsize;
+	}
+	hyp_spin_unlock(&smmu_domain->pgt_lock);
+	return total_unmapped;
+}
+
+static phys_addr_t smmu_iova_to_phys(struct kvm_hyp_iommu_domain *domain,
+				     unsigned long iova)
+{
+	phys_addr_t paddr;
+	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
+	struct io_pgtable *pgtable = smmu_domain->pgtable;
+
+	if (!unlikely(pgtable))
+		return -EINVAL;
+	if (unlikely(!domain->domain_id))
+		return iova;
+
+	hyp_spin_lock(&smmu_domain->pgt_lock);
+	paddr = pgtable->ops.iova_to_phys(&pgtable->ops, iova);
+	hyp_spin_unlock(&smmu_domain->pgt_lock);
+
+	return paddr;
+}
+
 static bool smmu_dabt_device(struct hyp_arm_smmu_v3_device *smmu,
 			     struct user_pt_regs *regs,
 			     u64 esr, u32 off)
@@ -1265,4 +1350,7 @@ struct kvm_iommu_ops smmu_ops = {
 	.alloc_domain			= smmu_alloc_domain,
 	.free_domain			= smmu_free_domain,
 	.iotlb_sync			= smmu_iotlb_sync,
+	.map_pages			= smmu_map_pages,
+	.unmap_pages			= smmu_unmap_pages,
+	.iova_to_phys			= smmu_iova_to_phys,
 };
