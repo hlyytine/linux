@@ -43,8 +43,6 @@ static unsigned int *hyp_memblock_nr_ptr = &kvm_nvhe_sym(hyp_memblock_nr);
 phys_addr_t hyp_mem_base;
 phys_addr_t hyp_mem_size;
 
-static struct rb_node *find_first_mapping_node(struct rb_root *root, u64 gfn);
-
 static int cmp_hyp_memblock(const void *p1, const void *p2)
 {
 	const struct memblock_region *r1 = p1;
@@ -433,33 +431,24 @@ device_initcall_sync(finalize_pkvm);
 
 void pkvm_host_reclaim_page(struct kvm *host_kvm, phys_addr_t ipa)
 {
-	struct kvm_pgtable *pgt = host_kvm->arch.mmu.pgt;
-	struct pkvm_mapping *mapping = NULL;
+
 	struct mm_struct *mm = current->mm;
-	u64 gfn = ipa >> PAGE_SHIFT;
-	struct rb_node *node;
-	struct page *page;
+	struct kvm_pinned_page *ppage;
 
 	write_lock(&host_kvm->mmu_lock);
-	node = find_first_mapping_node(&pgt->pkvm_mappings, gfn);
-	if (node) {
-		mapping = rb_entry(node, struct pkvm_mapping, node);
-		if (mapping->gfn == gfn) {
-			rb_erase(node, &pgt->pkvm_mappings);
-		} else {
-			mapping = NULL;
-			node = NULL;
-		}
-	}
+	ppage = kvm_pinned_pages_iter_first(&host_kvm->arch.pkvm.pinned_pages,
+					   ipa, ipa + PAGE_SIZE - 1);
+	if (ppage)
+		kvm_pinned_pages_remove(ppage, &host_kvm->arch.pkvm.pinned_pages);
 	write_unlock(&host_kvm->mmu_lock);
 
-	if (WARN_ON(!mapping))
+	WARN_ON(!ppage);
+	if (!ppage)
 		return;
 
 	account_locked_vm(mm, 1, false);
-	page = pfn_to_page(mapping->pfn);
-	unpin_user_pages_dirty_lock(&page, 1, true);
-	kfree(mapping);
+	unpin_user_pages_dirty_lock(&ppage->page, 1, true);
+	kfree(ppage);
 }
 
 static int __init pkvm_firmware_rmem_err(struct reserved_mem *rmem,
