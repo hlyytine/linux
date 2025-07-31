@@ -9,7 +9,7 @@
 
 #include <asm/kvm_host.h>
 #include <asm/kvm_mmu.h>
-#include <asm/patching.h>
+#include <asm/text-patching.h>
 #include <asm/setup.h>
 
 #include "hyp_trace.h"
