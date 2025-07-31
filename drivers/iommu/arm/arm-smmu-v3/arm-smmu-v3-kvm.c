@@ -53,46 +53,6 @@ static size_t				kvm_arm_smmu_count;
 static struct hyp_arm_smmu_v3_device	*kvm_arm_smmu_array;
 static DEFINE_IDA(kvm_arm_smmu_domain_ida);
 
-__maybe_unused
-static int kvm_arm_smmu_topup_memcache(struct arm_smccc_res *res, gfp_t gfp)
-{
-	struct kvm_hyp_req req;
-
-	hyp_reqs_smccc_decode(res, &req);
-
-	if ((res->a1 == -ENOMEM) && (req.type != KVM_HYP_REQ_TYPE_MEM)) {
-		/*
-		 * There is no way for drivers to populate hyp_alloc requests,
-		 * so -ENOMEM + no request indicates that.
-		 */
-		return __pkvm_topup_hyp_alloc(1);
-	} else if (req.type != KVM_HYP_REQ_TYPE_MEM) {
-		return -EBADE;
-	}
-
-	if (req.mem.dest == REQ_MEM_DEST_HYP_IOMMU) {
-		return __pkvm_topup_hyp_alloc_mgt_gfp(HYP_ALLOC_MGT_IOMMU_ID,
-						      req.mem.nr_pages,
-						      req.mem.sz_alloc,
-						      gfp);
-	} else if (req.mem.dest == REQ_MEM_DEST_HYP_ALLOC) {
-		/* Fill hyp alloc*/
-		return __pkvm_topup_hyp_alloc(req.mem.nr_pages);
-	}
-
-	pr_err("Bogus mem request");
-	return -EBADE;
-}
-
-#define kvm_call_hyp_nvhe_mc(...)					\
-({									\
-	struct arm_smccc_res __res;					\
-	do {								\
-		__res = kvm_call_hyp_nvhe_smccc(__VA_ARGS__);		\
-	} while (__res.a1 && !kvm_arm_smmu_topup_memcache(&__res, GFP_KERNEL));\
-	__res.a1;							\
-})
-
 static bool kvm_arm_smmu_validate_features(struct arm_smmu_device *smmu)
 {
 	unsigned int required_features =
@@ -274,8 +234,7 @@ static void kvm_arm_smmu_detach_dev_pasid(struct device *dev,
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
-				  kvm_smmu_domain->id, sid, pasid);
+		kvm_iommu_detach_dev(host_smmu->id, kvm_smmu_domain->id, sid, pasid);
 	}
 }
 
@@ -295,24 +254,9 @@ static int kvm_arm_smmu_map_pages(struct iommu_domain *domain,
 				  gfp_t gfp, size_t *total_mapped)
 {
 	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
-	size_t mapped;
-	size_t size = pgsize * pgcount;
-	struct arm_smccc_res res;
 
-	do {
-		res = kvm_call_hyp_nvhe_smccc(__pkvm_host_iommu_map_pages, kvm_smmu_domain->id,
-					      iova, paddr, pgsize, pgcount, prot);
-		mapped = res.a1;
-		iova += mapped;
-		paddr += mapped;
-		WARN_ON(mapped % pgsize);
-		WARN_ON(mapped > pgcount * pgsize);
-		pgcount -= mapped / pgsize;
-		*total_mapped += mapped;
-	} while (*total_mapped < size && !kvm_arm_smmu_topup_memcache(&res, gfp));
-	if (*total_mapped < size)
-		return -EINVAL;
-	return 0;
+	return kvm_iommu_map_pages(kvm_smmu_domain->id, iova, paddr,
+				   pgsize, pgcount, prot, gfp, total_mapped);
 }
 
 static size_t kvm_arm_smmu_unmap_pages(struct iommu_domain *domain,
@@ -321,31 +265,8 @@ static size_t kvm_arm_smmu_unmap_pages(struct iommu_domain *domain,
 				       struct iommu_iotlb_gather *iotlb_gather)
 {
 	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
-	size_t unmapped;
-	size_t total_unmapped = 0;
-	size_t size = pgsize * pgcount;
-	struct arm_smccc_res res;
 
-
-	do {
-		res = kvm_call_hyp_nvhe_smccc(__pkvm_host_iommu_unmap_pages,
-					      kvm_smmu_domain->id, iova, pgsize, pgcount);
-		unmapped = res.a1;
-		total_unmapped += unmapped;
-		iova += unmapped;
-		WARN_ON(unmapped % pgsize);
-		pgcount -= unmapped / pgsize;
-
-		/*
-		 * The page table driver can unmap less than we asked for. If it
-		 * didn't unmap anything at all, then it either reached the end
-		 * of the range, or it needs a page in the memcache to break a
-		 * block mapping.
-		 */
-	} while (total_unmapped < size &&
-		 (unmapped || !kvm_arm_smmu_topup_memcache(&res, GFP_ATOMIC)));
-
-	return total_unmapped;
+	return kvm_iommu_unmap_pages(kvm_smmu_domain->id, iova, pgsize, pgcount);
 }
 
 static phys_addr_t kvm_arm_smmu_iova_to_phys(struct iommu_domain *domain,
@@ -353,7 +274,7 @@ static phys_addr_t kvm_arm_smmu_iova_to_phys(struct iommu_domain *domain,
 {
 	struct kvm_arm_smmu_domain *kvm_smmu_domain = to_kvm_smmu_domain(domain);
 
-	return kvm_call_hyp_nvhe(__pkvm_host_iommu_iova_to_phys, kvm_smmu_domain->id, iova);
+	return kvm_iommu_iova_to_phys(kvm_smmu_domain->id, iova);
 }
 
 static int kvm_arm_smmu_domain_finalize(struct kvm_arm_smmu_domain *kvm_smmu_domain,
@@ -375,8 +296,7 @@ static int kvm_arm_smmu_domain_finalize(struct kvm_arm_smmu_domain *kvm_smmu_dom
 	if (kvm_smmu_domain->domain.type == IOMMU_DOMAIN_IDENTITY) {
 		kvm_smmu_domain->id = 0;
 		if (!identity_allocated) {
-			ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
-						   0, KVM_ARM_SMMU_DOMAIN_BYPASS);
+			ret = kvm_iommu_alloc_domain(0, KVM_ARM_SMMU_DOMAIN_BYPASS);
 			if (ret)
 				return ret;
 			identity_allocated = true;
@@ -436,8 +356,7 @@ static int kvm_arm_smmu_domain_finalize(struct kvm_arm_smmu_domain *kvm_smmu_dom
 
 	kvm_smmu_domain->id = ret;
 
-	ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
-				   kvm_smmu_domain->id, type);
+	ret = kvm_iommu_alloc_domain(kvm_smmu_domain->id, type);
 	if (ret) {
 		ida_free(&kvm_arm_smmu_domain_ida, kvm_smmu_domain->id);
 		return ret;
@@ -470,17 +389,16 @@ static int kvm_arm_smmu_attach_dev_pasid(struct iommu_domain *domain,
 	for (i = 0; i < fwspec->num_ids; i++) {
 		int sid = fwspec->ids[i];
 
-		ret = kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_attach_dev, host_smmu->id,
-					   kvm_smmu_domain->id, sid, pasid, master->ssid_bits, 0);
+		ret = kvm_iommu_attach_dev(host_smmu->id, kvm_smmu_domain->id, sid,
+					   pasid, master->ssid_bits, 0);
 		if (ret)
 			goto out_err;
 	}
 	return ret;
 out_err:
 	while (i--)
-		kvm_call_hyp_nvhe(__pkvm_host_iommu_detach_dev, host_smmu->id,
-				  kvm_smmu_domain->id, fwspec->ids[i], pasid);
-
+		kvm_iommu_detach_dev(host_smmu->id, kvm_smmu_domain->id,
+				     fwspec->ids[i], pasid);
 	return ret;
 }
 
@@ -515,7 +433,7 @@ static void kvm_arm_smmu_free_domain(struct iommu_domain *domain)
 	struct arm_smmu_device *smmu = kvm_smmu_domain->smmu;
 
 	if (smmu) {
-		ret = kvm_call_hyp_nvhe(__pkvm_host_iommu_free_domain, kvm_smmu_domain->id);
+		ret = kvm_iommu_free_domain(kvm_smmu_domain->id);
 		ida_free(&kvm_arm_smmu_domain_ida, kvm_smmu_domain->id);
 	}
 	kfree(kvm_smmu_domain);
@@ -714,7 +632,7 @@ static int kvm_arm_smmu_suspend(struct device *dev)
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(smmu);
 
 	if (host_smmu->power_domain.type == KVM_POWER_DOMAIN_HOST_HVC)
-		return kvm_call_hyp_nvhe(__pkvm_host_hvc_pd, host_smmu->id, 0);
+		return pkvm_iommu_suspend(host_smmu->id);
 	return 0;
 }
 
@@ -724,7 +642,7 @@ static int kvm_arm_smmu_resume(struct device *dev)
 	struct host_arm_smmu_device *host_smmu = smmu_to_host(smmu);
 
 	if (host_smmu->power_domain.type == KVM_POWER_DOMAIN_HOST_HVC)
-		return kvm_call_hyp_nvhe(__pkvm_host_hvc_pd, host_smmu->id, 1);
+		return pkvm_iommu_resume(host_smmu->id);
 	return 0;
 }
 
