@@ -17,6 +17,43 @@
 
 #include "arm-smmu-v3-module.h"
 
+#define KVM_IOMMU_PADDR_CACHE_MAX		((size_t)511)
+struct kvm_iommu_paddr_cache {
+	unsigned short	ptr;
+	u64		paddr[KVM_IOMMU_PADDR_CACHE_MAX];
+	size_t		pgsize[KVM_IOMMU_PADDR_CACHE_MAX];
+} kvm_iommu_unmap_cache[NR_CPUS];
+
+static void kvm_iommu_flush_unmap_cache(struct kvm_iommu_paddr_cache *cache)
+{
+	while (cache->ptr) {
+		cache->ptr--;
+		WARN_ON(__pkvm_host_unuse_dma(cache->paddr[cache->ptr],
+					      cache->pgsize[cache->ptr]));
+	}
+}
+
+static void smmu_iotlb_sync(struct kvm_hyp_iommu_domain *domain,
+			    struct iommu_iotlb_gather *gather);
+
+static void smmu_put_paddr(u64 paddr, size_t size)
+{
+	struct kvm_iommu_paddr_cache *cache = &kvm_iommu_unmap_cache[hyp_smp_processor_id()];
+
+	/*
+	 * It is guaranteed unmap is called with max of the cache size,
+	 * see kvm_iommu_unmap_pages()
+	 */
+	cache->paddr[cache->ptr] = paddr;
+	cache->pgsize[cache->ptr++] = size;
+
+	/* Make more space. */
+	if(cache->ptr == KVM_IOMMU_PADDR_CACHE_MAX) {
+		/* FIXME: INVAL TLB FIRST */
+		kvm_iommu_flush_unmap_cache(cache);
+	}
+}
+
 #ifdef MODULE
 void *memset(void *dst, int c, size_t count)
 {
@@ -951,18 +988,21 @@ static int smmu_attach_dev(pkvm_handle_t iommu, struct kvm_hyp_iommu_domain *dom
 	}
 
 	if (!smmu_domain->pgtable) {
+		struct arm_lpae_io_pgtable *data;
+
 		ret = smmu_domain_finalise(smmu_domain, smmu);
 		if (ret)
 			goto out_ret;
-		if (is_idmap_domain(domain)) {
-			struct arm_lpae_io_pgtable *data;
 
+		data = io_pgtable_to_data(smmu_domain->pgtable);
+		if (is_idmap_domain(domain)) {
 			idmap_pgtable = smmu_domain->pgtable;
-			data = io_pgtable_to_data(smmu_domain->pgtable);
 			data->idmapped = true;
 			ret = kvm_iommu_snapshot_host_stage2();
 			if (ret)
 				goto out_ret;
+		} else {
+			data->put_paddr = smmu_put_paddr;
 		}
 	}
 
@@ -1207,6 +1247,7 @@ static int smmu_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iov
 	if (!IS_ALIGNED(iova | paddr | pgsize, granule))
 		return -EINVAL;
 
+	__pkvm_host_use_dma(paddr, pgsize * pgcount);
 	hyp_spin_lock(&smmu_domain->pgt_lock);
 	while (pgcount) {
 		mapped = 0;
@@ -1224,6 +1265,9 @@ static int smmu_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iov
 	}
 	hyp_spin_unlock(&smmu_domain->pgt_lock);
 
+	if (pgcount)
+		__pkvm_host_unuse_dma(paddr, pgsize * pgcount);
+
 	return ret;
 }
 
@@ -1234,6 +1278,7 @@ static size_t smmu_unmap_pages(struct kvm_hyp_iommu_domain *domain, unsigned lon
 	size_t size = pgsize * pgcount;
 	struct hyp_arm_smmu_v3_domain *smmu_domain = domain->priv;
 	struct io_pgtable *pgtable = smmu_domain->pgtable;
+	struct kvm_iommu_paddr_cache *cache = &kvm_iommu_unmap_cache[hyp_smp_processor_id()];
 
 	if (unlikely(!pgtable || !domain->domain_id))
 		return -EINVAL;
@@ -1253,6 +1298,7 @@ static size_t smmu_unmap_pages(struct kvm_hyp_iommu_domain *domain, unsigned lon
 		pgcount -= unmapped / pgsize;
 	}
 	hyp_spin_unlock(&smmu_domain->pgt_lock);
+	kvm_iommu_flush_unmap_cache(cache);
 	return total_unmapped;
 }
 
