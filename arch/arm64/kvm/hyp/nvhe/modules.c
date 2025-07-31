@@ -229,7 +229,6 @@ const struct pkvm_module_ops module_ops = {
 	.hyp_pa = hyp_virt_to_phys,
 	.hyp_va = hyp_phys_to_virt,
 	.kern_hyp_va = __kern_hyp_va,
-	.register_hyp_event_ids = register_hyp_event_ids,
 	.tracing_reserve_entry = tracing_reserve_entry,
 	.tracing_commit_entry = tracing_commit_entry,
 	.tracing_mod_hyp_printk = tracing_mod_hyp_printk,
@@ -244,19 +243,12 @@ int __pkvm_init_module(void *host_mod)
 {
 	int (*do_module_init)(const struct pkvm_module_ops *ops);
 	struct pkvm_el2_module *mod = kern_hyp_va(host_mod);
-	void *event_ids, *funcs, *funcs_end, *ftrace_tramp;
-	size_t hyp_kern_offset;
+	void *event_ids;
 
 	event_ids = pkvm_module_hyp_va(mod, mod->event_ids.start);
-	funcs = pkvm_module_hyp_va(mod, mod->patchable_function_entries.start);
-	funcs_end = pkvm_module_hyp_va(mod, mod->patchable_function_entries.end);
-	/* see module.lds.h */
-	ftrace_tramp = pkvm_module_hyp_va(mod, mod->text.end) - 20;
 
-	hyp_kern_offset = mod->sections.start - mod->hyp_va;
-
-	register_hyp_mod_events(event_ids, mod->nr_hyp_events,
-				funcs, funcs_end, ftrace_tramp, hyp_kern_offset);
+	if (mod->nr_hyp_events)
+		register_hyp_event_ids(event_ids, mod->nr_hyp_events);
 
 	do_module_init = pkvm_module_hyp_va(mod, (void *)mod->init);
 
