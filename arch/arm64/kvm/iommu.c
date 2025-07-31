@@ -21,6 +21,19 @@ struct kvm_iommu_driver *iommu_driver;
 extern struct kvm_iommu_ops *kvm_nvhe_sym(kvm_iommu_ops);
 extern size_t kvm_nvhe_sym(hyp_kvm_iommu_pages);
 
+static int override_iommu_pages;
+
+
+static int __init early_kvm_iommu_pages(char *arg)
+{
+	if (!arg)
+		return -EINVAL;
+
+	return kstrtoint(arg, 10, &override_iommu_pages);
+}
+/* Typically used by modules. */
+early_param("kvm-arm.iommu_pages", early_kvm_iommu_pages);
+
 int kvm_iommu_register_driver(struct kvm_iommu_driver *kern_ops)
 {
 	if (WARN_ON(!kern_ops))
@@ -65,7 +78,11 @@ void kvm_iommu_remove_driver(void)
 
 size_t kvm_iommu_pages(void)
 {
-	size_t nr_pages = 0;
+	size_t nr_pages = override_iommu_pages;
+
+
+	if (nr_pages)
+		goto out_set_pages;
 	/*
 	 * This is called very early during setup_arch() where no initcalls,
 	 * so this has to call specific functions per each KVM driver.
@@ -74,6 +91,7 @@ size_t kvm_iommu_pages(void)
 	nr_pages = smmu_hyp_pgt_pages();
 #endif
 
+out_set_pages:
 	kvm_nvhe_sym(hyp_kvm_iommu_pages) = nr_pages;
 	return nr_pages;
 }
