@@ -29,7 +29,6 @@ extern const struct pkvm_module_ops		*mod_ops;
 #define hyp_virt_to_phys(x)			CALL_FROM_OPS(hyp_pa, x)
 #define hyp_phys_to_virt(x)			CALL_FROM_OPS(hyp_va, x)
 #define memcpy(x, y, z)				CALL_FROM_OPS(memcpy, x, y, z)
-#define kvm_iommu_init_device(x)		CALL_FROM_OPS(iommu_init_device, x)
 #define pkvm_time_get(x)			CALL_FROM_OPS(get_time, x)
 #define kvm_flush_dcache_to_poc(x, y)		CALL_FROM_OPS(flush_dcache_to_poc, x, y)
 #define hyp_alloc_missing_donations()		CALL_FROM_OPS(hyp_alloc_missing_donations)
@@ -45,7 +44,8 @@ extern const struct pkvm_module_ops		*mod_ops;
 #define __pkvm_host_use_dma(x, y)		CALL_FROM_OPS(pkvm_use_dma, x, y)
 #define __pkvm_host_unuse_dma(x, y)		CALL_FROM_OPS(pkvm_unuse_dma, x, y)
 #define kvm_iommu_snapshot_host_stage2()	CALL_FROM_OPS(iommu_snapshot_host_stage2)
-
+#undef hyp_smp_processor_id
+#define hyp_smp_processor_id()			CALL_FROM_OPS(hyp_smp_processor_id)
 #endif
 
 
