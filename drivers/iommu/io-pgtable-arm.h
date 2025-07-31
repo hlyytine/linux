@@ -15,6 +15,7 @@ struct arm_lpae_io_pgtable {
 
 	void			*pgd;
 	bool			idmapped; /* Page table is identity mapped */
+	void (*put_paddr)(u64 phys, size_t size);
 };
 
 #define ARM_LPAE_MAX_ADDR_BITS		52
