@@ -588,6 +588,15 @@ void __arm_lpae_free_pgtable(struct arm_lpae_io_pgtable *data, int lvl,
 	__arm_lpae_free_pages(start, table_size, &data->iop.cfg, data->iop.cookie);
 }
 
+static int visit_put_addr(struct io_pgtable_walk_data *walk_data, int lvl,
+			  arm_lpae_iopte *ptep, size_t size)
+{
+	struct arm_lpae_io_pgtable *data = walk_data->data;
+
+	data->put_paddr(iopte_to_paddr(*ptep, data), size);
+	return 0;
+}
+
 static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 			       struct iommu_iotlb_gather *gather,
 			       unsigned long iova, size_t size, size_t pgcount,
@@ -623,12 +632,25 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 			}
 
 			if (!iopte_leaf(pte, lvl, iop->fmt)) {
+				arm_lpae_iopte *next_ptep = iopte_deref(pte, data);
+				struct io_pgtable_walk_data walk_data = {
+					.data = data,
+					.visit = visit_put_addr,
+					.addr = iova + i * size,
+					.end = iova + i * size + size,
+				};
+				if (data->put_paddr)
+					__arm_lpae_iopte_walk(data, &walk_data, next_ptep, lvl+1);
+
 				__arm_lpae_clear_pte(&ptep[i], &iop->cfg, 1);
 
 				/* Also flush any partial walks */
 				io_pgtable_tlb_flush_walk(iop, iova + i * size, size,
 							  ARM_LPAE_GRANULE(data));
-				__arm_lpae_free_pgtable(data, lvl + 1, iopte_deref(pte, data));
+				__arm_lpae_free_pgtable(data, lvl + 1, next_ptep);
+			} else {
+				if (data->put_paddr && !data->idmapped)
+					data->put_paddr(iopte_to_paddr(pte, data), size);
 			}
 		}
 
