@@ -121,6 +121,7 @@ struct io_pgtable *kvm_arm_io_pgtable_alloc(struct io_pgtable_cfg *cfg,
 	if (!data->iop.cfg.coherent_walk)
 		kvm_flush_dcache_to_poc(data->pgd, pgd_size);
 
+	data->iop.cookie = cookie;
 	/* Ensure the empty pgd is visible before any actual TTBR write */
 	wmb();
 
