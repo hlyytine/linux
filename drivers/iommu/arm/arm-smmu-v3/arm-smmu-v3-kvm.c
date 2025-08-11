@@ -7,6 +7,7 @@
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_pkvm.h>
 
+#include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
 
@@ -14,6 +15,74 @@
 #include "pkvm/arm_smmu_v3.h"
 
 extern struct kvm_iommu_ops kvm_nvhe_sym(smmu_ops);
+
+static size_t				kvm_arm_smmu_count;
+static struct hyp_arm_smmu_v3_device	*kvm_arm_smmu_array;
+
+static void kvm_arm_smmu_array_free(void)
+{
+	int order;
+
+	order = get_order(kvm_arm_smmu_count * sizeof(*kvm_arm_smmu_array));
+	free_pages((unsigned long)kvm_arm_smmu_array, order);
+}
+
+/*
+ * The hypervisor have to know the basic information about the SMMUs
+ * from the firmware.
+ * This has to be done before the SMMUv3 probes and does anything meaningful
+ * with the hardware, otherwise it becomes harder to reason about the SMMU
+ * state and we'd require to hand-off the state to the hypervisor at certain point
+ * while devices are live, which is complicated and dangerous.
+ * Instead, the hypervisor is interested in a very small part of the probe path,
+ * so just add a separate logic for it.
+ */
+static int kvm_arm_smmu_array_alloc(void)
+{
+	int smmu_order;
+	struct device_node *np;
+	int ret;
+	int i = 0;
+
+	kvm_arm_smmu_count = 0;
+	for_each_compatible_node(np, NULL, "arm,smmu-v3")
+		kvm_arm_smmu_count++;
+
+	if (!kvm_arm_smmu_count)
+		return -ENODEV;
+
+	smmu_order = get_order(kvm_arm_smmu_count * sizeof(*kvm_arm_smmu_array));
+	kvm_arm_smmu_array = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, smmu_order);
+	if (!kvm_arm_smmu_array)
+		return -ENOMEM;
+
+	/* Basic device tree parsing. */
+	for_each_compatible_node(np, NULL, "arm,smmu-v3") {
+		struct resource res;
+
+		ret = of_address_to_resource(np, 0, &res);
+		if (ret)
+			goto out_err;
+		kvm_arm_smmu_array[i].mmio_addr = res.start;
+		kvm_arm_smmu_array[i].mmio_size = resource_size(&res);
+		if (kvm_arm_smmu_array[i].mmio_size < SZ_128K) {
+			pr_err("SMMUv3(%pOF) MMIO region too small(%pr)\n", np, &res);
+			ret = -EINVAL;
+			goto out_err;
+		}
+
+		if (of_dma_is_coherent(np))
+			kvm_arm_smmu_array[i].features |= ARM_SMMU_FEAT_COHERENCY;
+
+		i++;
+	}
+
+	return 0;
+
+out_err:
+	kvm_arm_smmu_array_free();
+	return ret;
+}
 
 static size_t smmu_hyp_pgt_pages(void)
 {
@@ -47,8 +116,27 @@ static int kvm_arm_smmu_v3_register(void)
 		return ret;
 	}
 
-	return kvm_iommu_register_driver(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))),
-					 nr_pages);
+	ret = kvm_arm_smmu_array_alloc();
+	if (ret)
+		return ret;
+
+	ret = kvm_iommu_register_driver(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))),
+					nr_pages);
+	if (ret)
+		goto out_err;
+
+	/*
+	 * These variables are stored in the nVHE image, and won't be accessible
+	 * after KVM initialization. Ownership of kvm_arm_smmu_array will be
+	 * transferred to the hypervisor as well.
+	 */
+	kvm_hyp_arm_smmu_v3_smmus = kvm_arm_smmu_array;
+	kvm_hyp_arm_smmu_v3_count = kvm_arm_smmu_count;
+	return ret;
+
+out_err:
+	kvm_arm_smmu_array_free();
+	return ret;
 };
 
 static int kvm_arm_smmu_v3_post_init(void)
