@@ -338,6 +338,14 @@ out_unlock:
 	return ret;
 }
 
+static inline void clear_domain(struct kvm_hyp_iommu_domain *domain)
+{
+	atomic_set(&domain->refs, 0);
+	domain->domain_id = 0;
+	domain->priv = NULL;
+	domain->vm = NULL;
+}
+
 int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 {
 	int ret = 0;
@@ -362,7 +370,7 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 	}
 
 	kvm_iommu_ops->free_domain(domain);
-	memset(domain, 0, sizeof(*domain));
+	clear_domain(domain);
 out_unlock:
 	hyp_spin_unlock(&kvm_iommu_domain_lock);
 
@@ -379,7 +387,7 @@ int kvm_iommu_force_free_domain(pkvm_handle_t domain_id, struct pkvm_hyp_vm *vm)
 	hyp_spin_lock(&kvm_iommu_domain_lock);
 	atomic_set(&domain->refs, 0);
 	kvm_iommu_ops->free_domain(domain);
-	memset(domain, 0, sizeof(*domain));
+	clear_domain(domain);
 	hyp_spin_unlock(&kvm_iommu_domain_lock);
 	cur_context = NULL;
 
