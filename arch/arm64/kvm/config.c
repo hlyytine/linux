@@ -840,9 +840,13 @@ static void __init check_feat_map(const struct reg_bits_to_feat_map *map,
 	for (int i = 0; i < map_size; i++)
 		mask |= map[i].bits;
 
-	if (mask != ~res0)
-		kvm_err("Undefined %s behaviour, bits %016llx\n",
-			str, mask ^ ~res0);
+	if (mask != ~res0) {
+		if (!is_nvhe_hyp_code())
+			kvm_err("Undefined %s behaviour, bits %016llx\n",
+				str, mask ^ ~res0);
+		else
+			BUG();
+	}
 }
 
 void __init check_feature_map(void)
