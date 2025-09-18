@@ -998,12 +998,41 @@ static int __host_set_page_state_range(u64 addr, u64 size,
 
 static void __hyp_set_page_state_range(phys_addr_t phys, u64 size, enum pkvm_page_state state)
 {
+	/* State is implied from pte not and set. */
+	if (!addr_is_memory(phys)) {
+		return;
+	}
+
 	for_each_hyp_page(page, phys, size)
 		set_hyp_state(page, state);
 }
 
+static enum pkvm_page_state hyp_get_page_state_mmio(kvm_pte_t pte, u64 addr)
+{
+	enum pkvm_page_state state = 0;
+	enum kvm_pgtable_prot prot;
+
+	if (!kvm_pte_valid(pte))
+		return PKVM_NOPAGE;
+	prot = kvm_pgtable_hyp_pte_prot(pte);
+	if (kvm_pte_valid(pte) && ((prot & KVM_PGTABLE_PROT_RWX) != PAGE_HYP)) {
+		state = PKVM_PAGE_RESTRICTED_PROT;
+	}
+	return state | pkvm_getstate(prot);
+}
+
 static int __hyp_check_page_state_range(phys_addr_t phys, u64 size, enum pkvm_page_state state)
 {
+	if (!range_is_memory(phys, phys + size)) {
+		struct check_walk_data d = {
+			.desired	= state,
+			.get_page_state	= hyp_get_page_state_mmio,
+		};
+
+		hyp_assert_lock_held(&pkvm_pgd_lock);
+		return check_page_state_range(&pkvm_pgtable, (u64)hyp_phys_to_virt(phys), size, &d);
+	}
+
 	for_each_hyp_page(page, phys, size) {
 		if (get_hyp_state(page) != state)
 			return -EPERM;
