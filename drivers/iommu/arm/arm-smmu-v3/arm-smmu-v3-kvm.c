@@ -409,14 +409,9 @@ static int kvm_arm_smmu_attach_dev(struct iommu_domain *domain,
 
 	return kvm_arm_smmu_attach_dev_pasid(domain, dev, 0, old);
 }
-static struct iommu_domain *kvm_arm_smmu_domain_alloc(unsigned type)
+static struct iommu_domain *kvm_arm_smmu_domain_alloc(void)
 {
 	struct kvm_arm_smmu_domain *smmu_domain;
-
-	if (type != IOMMU_DOMAIN_IDENTITY &&
-	    type != IOMMU_DOMAIN_DMA &&
-	    type != IOMMU_DOMAIN_UNMANAGED)
-		return ERR_PTR(-EINVAL);
 
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
@@ -424,6 +419,16 @@ static struct iommu_domain *kvm_arm_smmu_domain_alloc(unsigned type)
 
 	mutex_init(&smmu_domain->init_mutex);
 	return &smmu_domain->domain;
+}
+
+static struct iommu_domain *kvm_arm_smmu_domain_alloc_identity(struct device *dev)
+{
+	return kvm_arm_smmu_domain_alloc();
+}
+
+static struct iommu_domain *kvm_arm_smmu_domain_alloc_paging(struct device *dev)
+{
+	return kvm_arm_smmu_domain_alloc();
 }
 
 static void kvm_arm_smmu_free_domain(struct iommu_domain *domain)
@@ -471,7 +476,8 @@ static struct iommu_ops kvm_arm_smmu_ops = {
 	.release_device		= kvm_arm_smmu_release_device,
 	.pgsize_bitmap		= -1UL,
 	.owner			= THIS_MODULE,
-	.domain_alloc		= kvm_arm_smmu_domain_alloc,
+	.domain_alloc_paging		= kvm_arm_smmu_domain_alloc_paging,
+	.domain_alloc_identity		= kvm_arm_smmu_domain_alloc_identity,
 	.def_domain_type	= kvm_arm_smmu_def_domain_type,
 	.default_domain_ops 	=  &(const struct iommu_domain_ops) {
 		.attach_dev	= kvm_arm_smmu_attach_dev,
