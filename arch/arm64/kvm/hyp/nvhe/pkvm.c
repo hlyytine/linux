@@ -423,6 +423,7 @@ static int pkvm_init_features_from_host(struct pkvm_hyp_vm *hyp_vm, const struct
 		if (test_bit(KVM_ARCH_FLAG_WRITABLE_IMP_ID_REGS, &host_arch_flags))
 			hyp_vm->kvm.arch.midr_el1 = host_kvm->arch.midr_el1;
 
+		memcpy(kvm->arch.id_regs, host_kvm->arch.id_regs, sizeof(kvm->arch.id_regs));
 		memcpy(kvm->arch.fgu, host_kvm->arch.fgu, sizeof(host_kvm->arch.fgu));
 
 		return 0;
