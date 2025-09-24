@@ -8,6 +8,7 @@
 #include <asm/kvm_pkvm.h>
 
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 
 #include "arm-smmu-v3.h"
 #include "pkvm/arm_smmu_v3.h"
@@ -25,15 +26,47 @@ static size_t smmu_hyp_pgt_pages(void)
 	return 0;
 }
 
+static struct platform_driver smmuv3_nesting_driver;
+static int smmuv3_nesting_probe(struct platform_device *pdev)
+{
+	dev_err(&pdev->dev, "%s\n", __func__);
+	return 0;
+}
+
 static int kvm_arm_smmu_v3_register(void)
 {
 	size_t nr_pages = smmu_hyp_pgt_pages();
+	int ret;
 
 	if (!is_protected_kvm_enabled() || !nr_pages)
 		return 0;
+
+	ret = platform_driver_probe(&smmuv3_nesting_driver, smmuv3_nesting_probe);
+	if (ret) {
+		pr_err("Can't bind to SMMUs: %d\n", ret);
+		return ret;
+	}
 
 	return kvm_iommu_register_driver(kern_hyp_va(lm_alias(&kvm_nvhe_sym(smmu_ops))),
 					 nr_pages);
 };
 
-core_initcall(kvm_arm_smmu_v3_register);
+static int kvm_arm_smmu_v3_post_init(void)
+{
+	platform_driver_unregister(&smmuv3_nesting_driver);
+	return bus_rescan_devices(&platform_bus_type);
+}
+
+static const struct of_device_id smmuv3_nested_of_match[] = {
+	{ .compatible = "arm,smmu-v3", },
+	{ },
+};
+
+static struct platform_driver smmuv3_nesting_driver = {
+	.driver = {
+		.name = "smmuv3-nesting",
+		.of_match_table = smmuv3_nested_of_match,
+	},
+};
+device_initcall_sync(kvm_arm_smmu_v3_post_init);
+subsys_initcall(kvm_arm_smmu_v3_register);
