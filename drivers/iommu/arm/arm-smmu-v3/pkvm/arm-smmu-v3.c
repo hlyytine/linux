@@ -284,7 +284,7 @@ static void smmu_deinit_device(struct hyp_arm_smmu_v3_device *smmu)
 	for (i = 0 ; i < nr_pages ; ++i) {
 		u64 pfn = (smmu->mmio_addr >> PAGE_SHIFT) + i;
 
-		WARN_ON(__pkvm_hyp_donate_host_mmio(pfn));
+		WARN_ON(__pkvm_hyp_donate_host(pfn, 1));
 	}
 }
 
@@ -352,8 +352,9 @@ static int smmu_init_cmdq(struct hyp_arm_smmu_v3_device *smmu)
 	if (!(smmu->features & ARM_SMMU_FEAT_COHERENCY))
 		prot |= KVM_PGTABLE_PROT_NORMAL_NC;
 
-	ret = ___pkvm_host_donate_hyp(smmu->cmdq.base_dma >> PAGE_SHIFT,
-				      PAGE_ALIGN(cmdq_size) >> PAGE_SHIFT, prot);
+	ret = ___pkvm_host_donate_hyp_prot(smmu->cmdq.base_dma >> PAGE_SHIFT,
+					   PAGE_ALIGN(cmdq_size) >> PAGE_SHIFT,
+					   false, prot);
 	if (ret)
 		return ret;
 
@@ -525,8 +526,9 @@ static int smmu_init_strtab(struct hyp_arm_smmu_v3_device *smmu)
 	if (!(smmu->features & ARM_SMMU_FEAT_COHERENCY))
 		prot |= KVM_PGTABLE_PROT_NORMAL_NC;
 
-	ret = ___pkvm_host_donate_hyp(hyp_phys_to_pfn(smmu->strtab_dma),
-				      smmu->strtab_size >> PAGE_SHIFT, prot);
+	ret = ___pkvm_host_donate_hyp_prot(hyp_phys_to_pfn(smmu->strtab_dma),
+					   smmu->strtab_size >> PAGE_SHIFT,
+					   false, prot);
 	if (ret)
 		return ret;
 	if (smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB) {
@@ -573,7 +575,7 @@ static int smmu_init_device(struct hyp_arm_smmu_v3_device *smmu)
 		 * This should never happen, so it's fine to be strict to avoid
 		 * complicated error handling.
 		 */
-		WARN_ON(__pkvm_host_donate_hyp_mmio(pfn));
+		WARN_ON(___pkvm_host_donate_hyp(pfn, 1, true));
 	}
 	smmu->base = hyp_phys_to_virt(smmu->mmio_addr);
 	ret = smmu_probe(smmu);
