@@ -139,6 +139,10 @@ enum pkvm_psci_notification {
  * @kern_hyp_va:		Convert a kernel virtual address into an
  *				hypervisor virtual one.
  * @hyp_smp_processor_id:	Current CPU id
+ * @iommu_donate_pages:		Allocate pages from the IOMMU pool.
+ * @iommu_reclaim_pages:	Reclaim pages to the IOMMU pool.
+ * @get_time:			Get time in us, typically used to track intervals.
+ * @host_donate_hyp_prot:	Donate pages to hyp with prot.
  */
 struct pkvm_module_ops {
 	int (*create_private_mapping)(phys_addr_t phys, size_t size,
@@ -187,6 +191,12 @@ struct pkvm_module_ops {
 				    enum kvm_pgtable_prot prot, bool is_protected);
 	int (*unmap_module_pages)(u64 pfn, void *va, u64 nr_pages);
 	int (*hyp_smp_processor_id)(void);
+	void *(*iommu_donate_pages)(u8 order);
+	void (*iommu_reclaim_pages)(void *p);
+	u64 (*get_time)(void);
+	int (*host_donate_hyp_prot)(u64 pfn, u64 nr_pages,
+				    bool accept_mmio,
+				    enum kvm_pgtable_prot prot);
 
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
