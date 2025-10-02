@@ -145,19 +145,6 @@ static size_t smmu_hyp_pgt_pages(void)
 	return 0;
 }
 
-static struct platform_driver smmuv3_nesting_driver;
-static int smmuv3_nesting_probe(struct platform_device *pdev)
-{
-	dev_err(&pdev->dev, "%s\n", __func__);
-	return 0;
-}
-
-static int kvm_arm_smmu_v3_post_init(void)
-{
-	platform_driver_unregister(&smmuv3_nesting_driver);
-	return bus_rescan_devices(&platform_bus_type);
-}
-
 static int kvm_arm_smmu_v3_init(void)
 {
 	int ret;
@@ -176,9 +163,6 @@ static int kvm_arm_smmu_v3_init(void)
 	if (ret)
 		return ret;
 
-#ifdef MODULE
-	return kvm_arm_smmu_v3_post_init();
-#endif
 	return 0;
 }
 
@@ -193,12 +177,6 @@ static int kvm_arm_smmu_v3_register(void)
 
 	if (!is_protected_kvm_enabled() || !nr_pages)
 		return 0;
-
-	ret = platform_driver_probe(&smmuv3_nesting_driver, smmuv3_nesting_probe);
-	if (ret) {
-		pr_err("Can't bind to SMMUs: %d\n", ret);
-		return ret;
-	}
 
 	ret = kvm_arm_smmu_array_alloc();
 	if (ret)
@@ -222,21 +200,6 @@ out_err:
 	return ret;
 };
 
-static const struct of_device_id smmuv3_nested_of_match[] = {
-	{ .compatible = "arm,smmu-v3", },
-	{ },
-};
-
-static struct platform_driver smmuv3_nesting_driver = {
-	.driver = {
-		.name = "smmuv3-nesting",
-		.of_match_table = smmuv3_nested_of_match,
-	},
-};
 subsys_initcall(kvm_arm_smmu_v3_register);
-
-#ifndef MODULE
-device_initcall_sync(kvm_arm_smmu_v3_post_init);
-#endif
 
 MODULE_LICENSE("GPL v2");
