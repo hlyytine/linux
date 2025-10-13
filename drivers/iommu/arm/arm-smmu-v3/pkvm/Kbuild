@@ -3,4 +3,7 @@ subdir-ccflags-y += -DMODULE
 ifeq ($(CONFIG_ARM_SMMU_V3_PKVM),m)
 hyp-obj-y := arm-smmu-v3.o ../arm-smmu-v3-common-lib.o io-pgtable-arm-hyp.o  ../../../io-pgtable-arm.o arm-smmu-v3-lib-hyp.o
 endif
+ifeq ($(CONFIG_ARM_SMMU_V3_PKVM_PV),m)
+hyp-obj-y := arm-smmu-v3-pv.o ../arm-smmu-v3-common-lib.o io-pgtable-arm-hyp.o  ../../../io-pgtable-arm.o arm-smmu-v3-lib-hyp.o
+endif
 include $(srctree)/arch/arm64/kvm/hyp/nvhe/Makefile.module
