@@ -145,6 +145,8 @@ enum pkvm_psci_notification {
  * @iommu_reclaim_pages_atomic:	Reclaim pages to the IOMMU pool from atomic pool.
  * @get_time:			Get time in us, typically used to track intervals.
  * @host_donate_hyp_prot:	Donate pages to hyp with prot.
+ * @hyp_alloc:			Allocate memory in hyp VA space.
+ * @hyp_free:			Free memory allocated  from hyp_alloc().
  */
 struct pkvm_module_ops {
 	int (*create_private_mapping)(phys_addr_t phys, size_t size,
@@ -201,7 +203,8 @@ struct pkvm_module_ops {
 	int (*host_donate_hyp_prot)(u64 pfn, u64 nr_pages,
 				    bool accept_mmio,
 				    enum kvm_pgtable_prot prot);
-
+	void *(*hyp_alloc)(size_t size);
+	void (*hyp_free)(void *addr);
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);

@@ -7,6 +7,7 @@
 #include <asm/kvm_hypevents.h>
 #include <asm/module.h>
 
+#include <nvhe/alloc.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/modules.h>
 #include <nvhe/mm.h>
@@ -270,6 +271,8 @@ const struct pkvm_module_ops module_ops = {
 	.iommu_reclaim_pages_atomic = kvm_iommu_reclaim_pages_atomic,
 	.get_time = pkvm_time_get,
 	.host_donate_hyp_prot = ___pkvm_host_donate_hyp_prot,
+	.hyp_alloc = hyp_alloc,
+	.hyp_free = hyp_free,
 };
 
 static void *pkvm_module_hyp_va(struct pkvm_el2_module *mod, void *kern_va)
