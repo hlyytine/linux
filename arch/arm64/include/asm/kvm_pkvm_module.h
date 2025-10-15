@@ -16,6 +16,8 @@ enum pkvm_psci_notification {
 	PKVM_PSCI_CPU_ENTRY,
 };
 
+struct kvm_power_domain;
+struct kvm_power_domain_ops;
 struct kvm_hyp_iommu_domain;
 struct iommu_iotlb_gather;
 
@@ -152,14 +154,14 @@ struct iommu_iotlb_gather;
  * @hyp_free:			Free memory allocated  from hyp_alloc().
  * @iommu_iotlb_gather_add_page:
  *				Add an IOVA range to an iommu_iotlb_gather.
- * @pkvm_use_dma:		DecrIncreement the refcount for pages used for DMA,
- * 				this is typically called from the module after a
- * 				successful map() operation, so the hypervisor
+ * @pkvm_use_dma:		Increment the refcount for pages used for DMA,
+ *				this is typically called from the module after a
  * 				can track the page state.
  * @pkvm_unuse_dma:		Decrement the refcount for pages used for DMA,
- * 				this is typically called from the module after a
- * 				successful unmap() operation, so the hypervisor
- * 				can track the page state.
+ *				this is typically called from the module after a
+ *				successful unmap() operation, so the hypervisor
+ *				can track the page state.
+ * @init_hvc_pd:		Register a power domain ops.
  */
 struct pkvm_module_ops {
 	int (*create_private_mapping)(phys_addr_t phys, size_t size,
@@ -224,6 +226,7 @@ struct pkvm_module_ops {
 					    size_t size);
 	int (*pkvm_use_dma)(phys_addr_t phys_addr, size_t size);
 	int (*pkvm_unuse_dma)(phys_addr_t phys_addr, size_t size);
+	int (*init_hvc_pd)(struct kvm_power_domain *pd, const struct kvm_power_domain_ops *ops);
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
 	ANDROID_KABI_RESERVE(3);
