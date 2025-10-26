@@ -147,7 +147,8 @@ struct io_pgtable_cfg {
 	 * physical pages without having to rely on slow methods
 	 * as calling iova_to_phys before each unmapped page.
 	 */
-	void (*put_pages)(void *cookie, u64 phys, size_t size);
+	void (*put_pages)(void *cookie, u64 phys, size_t size,
+			  struct iommu_iotlb_gather *gather);
 	/* Low-level data specific to the table format */
 	union {
 		struct {
@@ -306,10 +307,11 @@ io_pgtable_tlb_add_page(struct io_pgtable *iop,
 }
 
 static inline void
-io_pgtable_put_pages(struct io_pgtable *iop, u64 phys, size_t size)
+io_pgtable_put_pages(struct io_pgtable *iop, u64 phys, size_t size,
+		     struct iommu_iotlb_gather *gather)
 {
 	if (iop->cfg.put_pages)
-		iop->cfg.put_pages(iop->cookie, phys, size);
+		iop->cfg.put_pages(iop->cookie, phys, size, gather);
 }
 
 /**

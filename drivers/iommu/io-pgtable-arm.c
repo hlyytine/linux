@@ -563,13 +563,18 @@ static int __arm_lpae_iopte_walk(struct arm_lpae_io_pgtable *data,
 				 arm_lpae_iopte *ptep,
 				 int lvl);
 
+struct put_pages_data {
+	struct arm_lpae_io_pgtable *data;
+	struct iommu_iotlb_gather *gather;
+};
+
 static int visit_put_pages(struct io_pgtable_walk_data *walk_data, int lvl,
 			   arm_lpae_iopte *ptep, size_t size)
 {
-	struct arm_lpae_io_pgtable *data = walk_data->data;
+	struct put_pages_data *put_data = walk_data->data;
 
-	io_pgtable_put_pages(data->iop.cookie, iopte_to_paddr(*ptep, data),
-			     ARM_LPAE_BLOCK_SIZE(lvl, data));
+	io_pgtable_put_pages(put_data->data->iop.cookie, iopte_to_paddr(*ptep, put_data->data),
+			     ARM_LPAE_BLOCK_SIZE(lvl, put_data->data), put_data->gather);
 	return 0;
 }
 
@@ -609,8 +614,12 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 
 			if (!iopte_leaf(pte, lvl, iop->fmt)) {
 				if (iop->cfg.put_pages) {
-					struct io_pgtable_walk_data walk_data = {
+					struct put_pages_data put_data = {
 						.data = data,
+						.gather = gather,
+					};
+					struct io_pgtable_walk_data walk_data = {
+						.data = &put_data,
 						.visit = visit_put_pages,
 						.addr = iova + i * size,
 						.end = iova + i * size + size,
@@ -627,7 +636,7 @@ static size_t __arm_lpae_unmap(struct arm_lpae_io_pgtable *data,
 							  ARM_LPAE_GRANULE(data));
 				__arm_lpae_free_pgtable(data, lvl + 1, iopte_deref(pte, data));
 			} else {
-				io_pgtable_put_pages(iop, iopte_to_paddr(pte, data), size);
+				io_pgtable_put_pages(iop, iopte_to_paddr(pte, data), size, gather);
 			}
 		}
 
