@@ -21,5 +21,9 @@ host1x-y = \
 host1x-$(CONFIG_IOMMU_API) += \
 	context.o
 
+# Only build in-tree driver if NOT using NVIDIA OOT driver
+ifndef CONFIG_TEGRA_HOST1X_NVIDIA_OOT
 obj-$(CONFIG_TEGRA_HOST1X) += host1x.o
+endif
+
 obj-$(CONFIG_TEGRA_HOST1X_CONTEXT_BUS) += context_bus.o

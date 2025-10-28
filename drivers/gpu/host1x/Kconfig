@@ -19,9 +19,26 @@ config TEGRA_HOST1X
 
 if TEGRA_HOST1X
 
+config TEGRA_HOST1X_NVIDIA_OOT
+	bool "Use NVIDIA out-of-tree host1x driver instead"
+	help
+	  Say Y if using NVIDIA's out-of-tree (OOT) host1x driver from
+	  nvidia-oot instead of the upstream in-tree driver.
+
+	  The OOT driver provides extended APIs required by nvdisplay
+	  (e.g., syncpoint shim support) that are not available in the
+	  upstream driver.
+
+	  When enabled, the in-tree host1x driver will not be built,
+	  but CONFIG_TEGRA_HOST1X remains defined so that OOT modules
+	  (nvgpu, nvdisplay, nvidia-oot) can compile correctly.
+
+	  If unsure, say N.
+
 config TEGRA_HOST1X_FIREWALL
 	bool "Enable HOST1X security firewall"
 	default y
+	depends on !TEGRA_HOST1X_NVIDIA_OOT
 	help
 	  Say yes if kernel should protect command streams from tampering.
 
