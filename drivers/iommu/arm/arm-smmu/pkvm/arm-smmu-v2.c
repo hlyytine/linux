@@ -918,47 +918,91 @@ int smmu_v2_unmap_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid)
 /**
  * smmu_v2_tlb_sync_global - Wait for global TLB sync to complete
  * @smmu: SMMU device
+ *
+ * Returns: 0 on success, -ETIMEDOUT on timeout
  */
 int smmu_v2_tlb_sync_global(struct hyp_arm_smmu_v2_device *smmu)
 {
 	u32 val;
+	unsigned int timeout = TLB_LOOP_TIMEOUT;
 
 	/* Trigger sync */
 	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_sTLBGSYNC, 0);
 
-	/* Poll for completion */
-	/* TODO: Use proper polling with timeout */
+	/* Poll for completion with timeout */
 	do {
 		val = smmu_tlb_sync_status(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_sTLBGSTATUS);
-	} while (val & 1);
+		if (!(val & ARM_SMMU_sTLBGSTATUS_GSACTIVE))
+			return 0;
+		timeout--;
+	} while (timeout);
 
-	return 0;
+	/* Timeout - hardware error */
+	hyp_err("SMMU[%u]: Global TLB sync timeout (GSACTIVE still set)\n", smmu->id);
+	return -ETIMEDOUT;
 }
 
 /**
  * smmu_v2_tlb_sync_context - Wait for context TLB sync to complete
  * @smmu: SMMU device
  * @cb_idx: Context bank index
+ *
+ * Returns: 0 on success, -ETIMEDOUT on timeout
  */
 int smmu_v2_tlb_sync_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx)
 {
-	/* TODO: Implement CB-specific TLB sync */
-	return smmu_v2_tlb_sync_global(smmu);
+	void __iomem *cb_base;
+	u32 val;
+	unsigned int timeout = TLB_LOOP_TIMEOUT;
+
+	/* Calculate context bank base address */
+	cb_base = smmu->base + ((cb_idx + 2) << smmu->pgshift);
+
+	/* Trigger sync */
+	writel_relaxed(0, cb_base + ARM_SMMU_CB_TLBSYNC);
+	if (smmu->has_secondary_base) {
+		void __iomem *cb_base_sec = smmu->base_sec + ((cb_idx + 2) << smmu->pgshift);
+		writel_relaxed(0, cb_base_sec + ARM_SMMU_CB_TLBSYNC);
+	}
+
+	/* Poll for completion with timeout */
+	do {
+		val = readl_relaxed(cb_base + ARM_SMMU_CB_TLBSTATUS);
+		if (smmu->has_secondary_base)
+			val |= readl_relaxed(smmu->base_sec + ((cb_idx + 2) << smmu->pgshift) + ARM_SMMU_CB_TLBSTATUS);
+
+		if (!(val & BIT(0)))  /* SACTIVE bit */
+			return 0;
+		timeout--;
+	} while (timeout);
+
+	/* Timeout - hardware error */
+	hyp_err("SMMU[%u]: Context bank %u TLB sync timeout (SACTIVE still set)\n",
+		smmu->id, cb_idx);
+	return -ETIMEDOUT;
 }
 
 /**
  * smmu_v2_tlb_inv_context - Invalidate all TLB entries for a context
  * @smmu: SMMU device
  * @cb_idx: Context bank index
+ *
+ * Uses TLBIVMID to invalidate all TLB entries for a given VMID.
+ * This is more efficient than per-page invalidation for large ranges.
  */
 void smmu_v2_tlb_inv_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx)
 {
 	struct smmu_v2_cb_state *cb = &smmu->cb_state[cb_idx];
+	int ret;
 
-	/* TODO: Implement context invalidation */
-	/* Use TLBIVMID or CB-specific invalidation */
+	/* Invalidate all TLB entries for this VMID */
 	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_TLBIVMID, cb->vmid);
-	smmu_v2_tlb_sync_global(smmu);
+
+	/* Ensure invalidation completes */
+	ret = smmu_v2_tlb_sync_global(smmu);
+	if (ret)
+		hyp_err("SMMU[%u]: TLB sync failed after context invalidation (CB %u, VMID %u)\n",
+			smmu->id, cb_idx, cb->vmid);
 }
 
 /**
@@ -968,13 +1012,57 @@ void smmu_v2_tlb_inv_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx)
  * @iova: Starting IOVA
  * @size: Size of range
  * @granule: Invalidation granule
+ *
+ * For small ranges, use address-based invalidation. For large ranges,
+ * fall back to full context invalidation which is more efficient.
  */
 void smmu_v2_tlb_inv_range(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx,
 			   unsigned long iova, size_t size, size_t granule)
 {
-	/* TODO: Implement range invalidation */
-	/* For now, invalidate entire context */
-	smmu_v2_tlb_inv_context(smmu, cb_idx);
+	void __iomem *cb_base;
+	unsigned long iova_start, iova_end;
+	size_t num_pages;
+	int ret;
+
+	/* Calculate number of pages in range */
+	num_pages = (size + granule - 1) / granule;
+
+	/*
+	 * Threshold for full context invalidation vs per-page:
+	 * If more than 32 pages, invalidate entire context for efficiency.
+	 * This avoids excessive register writes for large unmaps.
+	 */
+	if (num_pages > 32) {
+		smmu_v2_tlb_inv_context(smmu, cb_idx);
+		return;
+	}
+
+	/* Calculate context bank base address */
+	cb_base = smmu->base + ((cb_idx + 2) << smmu->pgshift);
+
+	/* Invalidate each page in the range */
+	iova_start = iova & ~(granule - 1);
+	iova_end = iova_start + size;
+
+	for (; iova_start < iova_end; iova_start += granule) {
+		/*
+		 * Use Stage-2 TLB invalidate by IPA (S2_TLBIIPAS2).
+		 * For Stage-2-only translation, this is the appropriate operation.
+		 * The address is shifted right by 12 bits (4K page boundary).
+		 */
+		u64 addr = iova_start >> 12;
+
+		writel_relaxed((u32)addr, cb_base + ARM_SMMU_CB_S2_TLBIIPAS2);
+		if (smmu->has_secondary_base) {
+			void __iomem *cb_base_sec = smmu->base_sec + ((cb_idx + 2) << smmu->pgshift);
+			writel_relaxed((u32)addr, cb_base_sec + ARM_SMMU_CB_S2_TLBIIPAS2);
+		}
+	}
+
+	/* Ensure TLB invalidations complete */
+	ret = smmu_v2_tlb_sync_context(smmu, cb_idx);
+	if (ret)
+		hyp_err("SMMU[%u]: TLB sync failed after range invalidation\n", smmu->id);
 }
 
 /*
