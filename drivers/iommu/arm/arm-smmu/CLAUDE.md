@@ -288,16 +288,19 @@ static const struct mc_client_info tegra234_mc_clients[] = {
 
 ### Implementation Status
 
-#### Current Status: Phase 3 Complete - TLB Operations
+#### Current Status: Phase 4 Complete - MMIO Emulation and Shadow State
 
 **Date Completed**: 2025-10-29
 
-Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2 translation), and Phase 3 (TLB operations) are complete. The EL2 driver can now:
+Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2 translation), Phase 3 (TLB operations), and Phase 4 (MMIO emulation) are complete. The EL2 driver can now:
 - Probe hardware capabilities and perform complete reset sequences
 - Initialize all data structures and create global identity-mapped page tables
 - Configure context banks with Stage-2-only translation for protected domains
 - Perform TLB synchronization with timeout handling (global and context-specific)
 - Invalidate TLB entries efficiently (full context or optimized IOVA range)
+- Trap and emulate all SMMU register accesses from host (GR0, GR1, CB pages)
+- Enforce Stage-2 translation mode via CBAR for protected domains
+- Shadow SMR/S2CR state and protect TTBR0 from host modification
 
 #### Completed Work
 
@@ -352,11 +355,26 @@ Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2
       - `smmu_v2_tlb_flush_walk()` - Called when unmapping non-leaf PTEs
       - `smmu_v2_tlb_add_page()` - Called when unmapping leaf PTEs
       - Both invalidate all TLBs across all SMMU instances for simplicity
-  - MMIO emulation framework:
-    - `smmu_v2_mmio_handler()` - Main trap entry point
-    - `smmu_v2_handle_gr0()` - GR0 register handler stub
-    - `smmu_v2_handle_gr1()` - GR1 register handler stub
-    - `smmu_v2_handle_cb()` - Context bank register handler stub
+  - **MMIO emulation (Phase 4 COMPLETE)**:
+    - `smmu_v2_mmio_handler()` - Main trap entry point (lines 1292-1330)
+    - `smmu_v2_handle_gr0()` - GR0 register handler (lines 656-830, 190 lines)
+      * ID registers (IDR0-IDR7): Pass-through hardware capabilities
+      * sCR0: Global control with safety enforcement
+      * Fault registers: sGFSR, sGFSYNR0-2 (read/write-1-to-clear)
+      * TLB operations: TLBIVMID, TLBIALLNSNH/H, sTLBGSYNC/STATUS
+      * SMR registers: Stream match with shadow state tracking
+      * S2CR registers: Stream-to-context mapping with shadow state
+    - `smmu_v2_handle_gr1()` - GR1 register handler (lines 848-943, 112 lines)
+      * CBAR: Enforces CBAR_TYPE_S2_TRANS for protected domains
+      * CBA2R: Extended attributes (VMID16, VA64)
+      * CBFRSYNRA: Fault syndrome auxiliary (read-only)
+    - `smmu_v2_handle_cb()` - CB register handler (lines 964-1290, 346 lines)
+      * SCTLR, TCR/TCR2, TTBR0/TTBR1: Translation control
+      * TTBR0 shadowing: Prevents host from overwriting EL2's page table
+      * MAIR0/MAIR1: Memory attributes
+      * FSR/FAR/FSYNR0: Fault status and address
+      * TLBSYNC/TLBSTATUS, S2_TLBIIPAS2: Per-CB TLB operations
+      * CONTEXTIDR, RESUME, ACTLR: Context control
   - Context bank management:
     - `smmu_v2_alloc_context_bank()` - Bitmap-based CB allocation (implemented)
     - `smmu_v2_free_context_bank()` - CB release (implemented)
@@ -424,7 +442,7 @@ The following areas contain stub functions marked with `TODO` comments:
 4. ✓ Global page table creation - Create identity-mapped Stage-2 page table (COMPLETE)
 5. ✓ Context bank initialization - Program CBAR, TTBR, VTCR, SCTLR for Stage-2 (COMPLETE)
 6. ✓ TLB operations - Global/context sync, range invalidation with timeout (COMPLETE - Phase 3)
-7. ✗ GR0/GR1/CB register emulation - Implement actual register handling logic
+7. ✓ GR0/GR1/CB register emulation - Full MMIO trap-and-emulate implementation (COMPLETE - Phase 4)
 8. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
 
 **MC Integration:**
@@ -452,13 +470,13 @@ drivers/iommu/arm/arm-smmu/
 └── pkvm/
     ├── Makefile                 # Builds arm-smmu-v2.o and tegra234-mc.o
     ├── arm-smmu-v2.h            # All data structures (282 lines)
-    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1-3 complete (1,146 lines)
+    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1-4 complete (1,739 lines)
     └── tegra234-mc.c            # MC integration skeleton (316 lines)
 
 drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 ```
 
-**Total Lines**: 2,138 lines (1,146 working implementation + 992 skeleton code)
+**Total Lines**: 2,731 lines (1,739 working implementation + 992 skeleton code)
 
 #### Phase 3 Completion Details (2025-10-29)
 
@@ -483,11 +501,46 @@ drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 **File Updates**:
 - `arm-smmu-v2.c`: +101 insertions, -13 deletions (now 1,146 lines)
 
+#### Phase 4 Completion Details (2025-10-29)
+
+**Commit**: `e84fc3092d92` - "pkvm: smmu-v2: Implement Phase 4 - MMIO Emulation and Shadow State"
+
+**Changes**:
+- `smmu_v2_handle_gr0()`: Complete GR0 register emulation (190 lines)
+  * ID registers (IDR0-IDR7): Pass-through hardware capabilities
+  * sCR0: Global control with safety enforcement (fault reporting always on)
+  * Fault registers: sGFSR, sGFSYNR0-2 (read/write-1-to-clear)
+  * TLB operations: TLBIVMID, TLBIALLNSNH/H, sTLBGSYNC/STATUS wired to Phase 3 TLB ops
+  * SMR registers: Stream match configuration with shadow state tracking
+  * S2CR registers: Stream-to-context mapping with shadow state
+- `smmu_v2_handle_gr1()`: Complete GR1 register emulation (112 lines)
+  * CBAR: **Enforces CBAR_TYPE_S2_TRANS for protected domains** (primary DMA isolation)
+  * CBA2R: Extended attributes (VMID16 tracking for TLB ops, VA64 support)
+  * CBFRSYNRA: Fault syndrome auxiliary (read-only pass-through)
+- `smmu_v2_handle_cb()`: Complete CB register emulation (346 lines)
+  * SCTLR: System control (MMU enable, fault handling)
+  * TCR/TCR2: Translation control (Stage-1/Stage-2)
+  * TTBR0/TTBR1: **TTBR0 shadowing prevents host from overwriting EL2's Stage-2 PT**
+  * MAIR0/MAIR1: Memory attribute indirection
+  * FSR/FAR/FSYNR0: Fault status and address (read/write-1-to-clear)
+  * TLBSYNC/TLBSTATUS: Per-CB TLB synchronization
+  * S2_TLBIIPAS2: Stage-2 TLB invalidate by IPA
+  * CONTEXTIDR, RESUME, ACTLR: Context control registers
+
+**Key Features**:
+- **Shadow state management**: SMR/S2CR arrays track host view vs hardware state
+- **TTBR0 protection**: Host writes shadowed, hardware keeps EL2's identity-mapped PT
+- **Stage-2 enforcement**: CBAR.TYPE forced to CBAR_TYPE_S2_TRANS for protected domains
+- **Tegra234 dual-base support**: All CB writes mirrored to secondary base (niso0/niso1)
+- **Register coverage**: 29 register types across 3 pages (GR0, GR1, CB)
+
+**File Updates**:
+- `arm-smmu-v2.c`: +612 insertions, -6 deletions (now 1,739 lines, +52% growth)
+
 #### Next Steps
 
-Proceed with **Phase 4: MMIO Emulation and Shadow State**:
-- **Phase 4**: MMIO Emulation and Shadow State - Implement GR0/GR1/CB register handlers
-- **Phase 5**: Stream Mapping - Configure SMR/S2CR hardware registers
+Proceed with **Phase 5: Stream Mapping**:
+- **Phase 5**: Stream Mapping - Configure SMR/S2CR hardware registers during device attachment
 - **Phase 6**: MC Integration - SID validation and MMIO trapping
 - **Phase 7**: Device Lifecycle - Domain attach/detach, page table operations
 
