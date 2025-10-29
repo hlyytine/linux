@@ -47,6 +47,7 @@
 #define ARM_SMMU_FEAT_TRANS_NESTED	BIT(2)
 #define ARM_SMMU_FEAT_COHERENT_WALK	BIT(3)
 #define ARM_SMMU_FEAT_VMID16		BIT(4)
+#define ARM_SMMU_FEAT_STREAM_MATCH	BIT(5)
 
 /*
  * Stream Match Register (SMR) and Stream-to-Context Register (S2CR)
@@ -173,6 +174,7 @@ extern struct hyp_tegra_mc tegra234_mc;
 int smmu_v2_init(struct hyp_arm_smmu_v2_device *smmu);
 int smmu_v2_probe_device(struct hyp_arm_smmu_v2_device *smmu);
 int smmu_v2_reset(struct hyp_arm_smmu_v2_device *smmu);
+int smmu_v2_global_init(void);
 
 /* MMIO emulation */
 bool smmu_v2_mmio_handler(u64 addr, bool is_write, u64 *val);

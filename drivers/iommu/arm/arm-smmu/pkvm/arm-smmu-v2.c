@@ -824,11 +824,7 @@ int smmu_v2_init_context_bank(struct hyp_arm_smmu_v2_device *smmu,
 	ttbr0 = pgt_cfg->arm_lpae_s2_cfg.vttbr;
 	smmu_writeq(smmu, cb_page, ARM_SMMU_CB_TTBR0, ttbr0);
 
-	/* 4. Configure MAIR (Memory Attribute Indirection Register) */
-	mair = pgt_cfg->arm_lpae_s2_cfg.mair;
-	smmu_writeq(smmu, cb_page, ARM_SMMU_CB_S1_MAIR0, mair);
-
-	/* 5. Enable translation by setting SCTLR.M bit */
+	/* 4. Enable translation by setting SCTLR.M bit */
 	sctlr = ARM_SMMU_SCTLR_M;        /* Enable MMU */
 	sctlr |= ARM_SMMU_SCTLR_TRE;     /* TEX remap enable */
 	sctlr |= ARM_SMMU_SCTLR_AFE;     /* Access flag enable */
