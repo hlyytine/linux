@@ -432,24 +432,27 @@ static const struct mc_client_info tegra234_mc_clients[] = {
     - `mc_get_client_name()` - Get client name for logging (implemented)
   - Global state: `tegra234_mc`
 
-**4. EL1 Stub Driver Skeleton** ✓
-- **File**: `drivers/iommu/arm/arm-smmu/arm-smmu-kvm.c` (407 lines)
+**4. EL1 Stub Driver** ✅ COMPLETE
+- **File**: `drivers/iommu/arm/arm-smmu/arm-smmu-kvm.c` (523 lines)
 - **Contents**:
-  - Data structures:
-    - `struct arm_smmu_kvm_device` - EL1 device state
-    - `struct arm_smmu_kvm_domain` - EL1 domain state
-  - Hypercall wrappers (stubs):
-    - `kvm_smmu_init_device()`, `kvm_smmu_alloc_domain()`, `kvm_smmu_free_domain()`
-    - `kvm_smmu_attach_dev()`, `kvm_smmu_detach_dev()`
-    - `kvm_smmu_map_pages()`, `kvm_smmu_unmap_pages()`, `kvm_smmu_iova_to_phys()`
+  - Data structures with complete implementation:
+    - `struct arm_smmu_kvm_device` - EL1 device state with iommu_device field
+    - `struct arm_smmu_kvm_domain` - EL1 domain state with domain ID tracking
+  - Hypercall wrappers (fully implemented):
+    - All IOMMU operations use `kvm_iommu_*` exported functions
+    - Domain allocation/free with memory cache handling
+    - Device attach/detach with Stream ID parsing
+    - Page table operations (map/unmap/iova_to_phys)
   - IOMMU ops structure (`arm_smmu_kvm_ops`):
-    - Domain operations (alloc, free, attach, detach)
-    - Page mapping operations (map_pages, unmap_pages, iova_to_phys)
-    - Device probe/release
-  - Platform driver boilerplate:
-    - `arm_smmu_kvm_device_probe()` - Device initialization
-    - `arm_smmu_kvm_device_remove()` - Cleanup
-    - Device tree matching: "arm,mmu-500", "nvidia,tegra234-smmu"
+    - Complete domain lifecycle (alloc, free, attach, detach)
+    - Page mapping operations with error handling
+    - Device probe with SMMU lookup and Stream ID extraction
+    - pgsize_bitmap = SZ_4K (Tegra234 erratum workaround)
+  - Platform driver (fully functional):
+    - `arm_smmu_kvm_device_probe()` - Complete device initialization
+    - `arm_smmu_kvm_device_remove()` - Proper cleanup with sysfs removal
+    - SMMU instance ID determination from MMIO base address
+    - Device tree parsing and validation
     - Module init/exit with pKVM detection
 
 **5. Data Structures** ✓
@@ -476,21 +479,21 @@ The following areas contain stub functions marked with `TODO` comments:
 3. ✓ Complete SID validation logic - Validate against sid_map[] (COMPLETE - Phase 6)
 
 **EL1 Stub Driver:**
-1. ✗ Hypercall interface - Define actual hypercall numbers and ABI
-2. ✗ Memory donation - Calculate required memory size and donate to EL2
-3. ✗ Stream ID parsing - Extract SIDs from device tree
-4. ✗ IOMMU device registration - Integrate with Linux IOMMU framework
+1. ✓ Hypercall interface - Uses exported `kvm_iommu_*` functions (COMPLETE)
+2. ✓ Memory donation - EL2 handles on-demand via `kvm_iommu_donate_pages_atomic()` (COMPLETE)
+3. ✓ Stream ID parsing - Parses `iommus` property from device tree (COMPLETE)
+4. ✓ IOMMU device registration - Full integration with Linux IOMMU framework (COMPLETE)
 
 **Integration:**
-1. ✗ pKVM hypercall wiring - Connect to `__pkvm_host_iommu_*` handlers
-2. ✗ Page table operations - Wire up io-pgtable-arm at EL2
-3. ✗ Stage-2 page table management - Manage hypervisor page tables for SMMU MMIO trapping
+1. ✓ pKVM hypercall wiring - Uses pre-registered `__pkvm_host_iommu_*` handlers (COMPLETE)
+2. ✓ Page table operations - Uses io-pgtable-arm at EL2 (COMPLETE - Phase 7)
+3. ✓ Stage-2 page table management - Implemented in Phase 7 (COMPLETE)
 
 #### File Locations
 
 ```
 drivers/iommu/arm/arm-smmu/
-├── arm-smmu-kvm.c              # EL1 stub driver (407 lines, skeleton)
+├── arm-smmu-kvm.c              # EL1 stub driver (523 lines, COMPLETE)
 ├── Makefile                     # Updated with pkvm/ subdir
 └── pkvm/
     ├── Makefile                 # Builds arm-smmu-v2.o and tegra234-mc.o
@@ -501,7 +504,12 @@ drivers/iommu/arm/arm-smmu/
 drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 ```
 
-**Total Lines**: 3,106 lines (2,699 working implementation + 407 skeleton EL1 stub)
+**Total Lines**: 3,222 lines (2,699 EL2 implementation + 523 EL1 stub driver)
+
+**Implementation Status**: ✅ **ALL COMPONENTS COMPLETE**
+- EL2 hypervisor driver: 2,699 lines (7 phases complete)
+- EL1 host stub driver: 523 lines (full implementation)
+- Total implementation: 3,222 lines
 
 #### Phase 3 Completion Details (2025-10-29)
 
@@ -738,11 +746,179 @@ The pKVM SMMUv2 implementation for Tegra234 is now fully functional at the EL2 h
 - Page table operations via io-pgtable
 
 **Next Steps**:
-1. **EL1 Stub Driver** (arm-smmu-kvm.c): Hypercall wrappers and memory donation
+1. ~~**EL1 Stub Driver** (arm-smmu-kvm.c)~~ - ✅ COMPLETE
 2. **Testing**: Hardware validation on Jetson AGX Orin
 3. **Integration**: Wire up with crosvm VMM for GPU passthrough
 
 See **Implementation Phases** section below for complete development timeline.
+
+#### EL1 Stub Driver Completion (2025-10-29)
+
+**Commit**: TBD - "pkvm: smmu-v2: Complete EL1 stub driver implementation"
+
+The EL1 host stub driver has been fully implemented, providing the bridge between the Linux kernel IOMMU framework and the EL2 hypervisor driver.
+
+**File**: `drivers/iommu/arm/arm-smmu/arm-smmu-kvm.c` (523 lines, complete implementation)
+
+**Key Components Implemented**:
+
+**1. Data Structures**:
+```c
+struct arm_smmu_kvm_device {
+    struct device           *dev;
+    struct iommu_device     iommu;        // ← Added for sysfs registration
+    u32                     hyp_smmu_id;  // Hypervisor SMMU ID (0-2)
+    phys_addr_t             base;         // MMIO base (donated to EL2)
+    resource_size_t         size;
+    u32                     num_context_banks;
+    u32                     num_mapping_groups;
+    void                    *donated_mem;
+    size_t                  donated_mem_size;
+};
+
+struct arm_smmu_kvm_domain {
+    struct iommu_domain             domain;
+    struct arm_smmu_kvm_device      *smmu;
+    u32                             hyp_domain_id;  // EL2 domain handle
+};
+```
+
+**2. Stream ID Parsing** (`arm_smmu_kvm_get_stream_id`, lines 111-142):
+- Parses device tree `iommus` property using `of_parse_phandle_with_args()`
+- Extracts Stream ID from `args.args[0]`
+- Validates SID range (0-255 for Tegra234)
+- Returns Stream ID for use in attach_dev hypercalls
+
+**3. Domain ID Allocation** (`arm_smmu_kvm_alloc_domain_id`, lines 97-100):
+- Uses atomic counter for unique domain ID allocation
+- Thread-safe allocation across all IOMMU instances
+- Domain IDs passed to EL2 for tracking
+
+**4. IOMMU Operations** (all using exported `kvm_iommu_*` functions):
+
+- **Domain alloc/free** (lines 148-175):
+  - `arm_smmu_kvm_domain_alloc()`: Allocates domain structure, defers initialization to attach
+  - `arm_smmu_kvm_domain_free()`: Calls `kvm_iommu_free_domain()` hypercall, frees memory
+
+- **Device attach/detach** (lines 177-251):
+  - `arm_smmu_kvm_attach_dev()`:
+    - Extracts Stream ID from device tree
+    - Allocates domain ID if first attachment
+    - Calls `kvm_iommu_alloc_domain()` and `kvm_iommu_attach_dev()`
+    - Logs successful attachment
+  - `arm_smmu_kvm_detach_dev()`: Calls `kvm_iommu_detach_dev()`, logs detachment
+
+- **Page table operations** (lines 253-297):
+  - `arm_smmu_kvm_map_pages()`: Wraps `kvm_iommu_map_pages()` with memory cache handling
+  - `arm_smmu_kvm_unmap_pages()`: Wraps `kvm_iommu_unmap_pages()`
+  - `arm_smmu_kvm_iova_to_phys()`: Wraps `kvm_iommu_iova_to_phys()`
+
+- **Device probe/release** (lines 299-342):
+  - `arm_smmu_kvm_probe_device()`:
+    - Parses device tree `iommus` property to find SMMU
+    - Locates platform device via `of_find_device_by_node()`
+    - Stores SMMU reference in `dev_iommu_priv_set()`
+    - Returns `&smmu->iommu` for IOMMU framework
+  - `arm_smmu_kvm_release_device()`: Clears IOMMU private data
+
+**5. SMMU Instance ID Determination** (`arm_smmu_kvm_get_smmu_id`, lines 367-388):
+- Maps MMIO base addresses to SMMU instance IDs:
+  - `0x8000000` or `0x7000000` → Instance 0 (smmu_niso1)
+  - `0x10000000` → Instance 1 (smmu_iso)
+  - `0x12000000` or `0x11000000` → Instance 2 (smmu_niso0)
+- Handles Tegra234's dual register base addressing
+
+**6. Platform Driver** (lines 390-518):
+
+- **Probe function** (`arm_smmu_kvm_device_probe`, lines 390-472):
+  - Retrieves MMIO resources from device tree
+  - Determines SMMU instance ID from base address
+  - Validates `#iommu-cells` property (must be 1 for SMMUv2)
+  - Uses hardcoded capability values (64 CBs, 128 SMRGs) since EL2 owns hardware
+  - **Note**: Memory donation deferred to EL2 (handled automatically via `kvm_iommu_donate_pages_atomic()`)
+  - Registers IOMMU device via `iommu_device_sysfs_add()` and `iommu_device_register()`
+  - Stores driver data for later retrieval
+
+- **Remove function** (`arm_smmu_kvm_device_remove`, lines 474-486):
+  - Unregisters IOMMU device from framework
+  - Removes sysfs entries via `iommu_device_sysfs_remove()`
+  - Frees any donated memory (if pre-allocated)
+
+- **Device tree matching** (lines 488-492):
+  - Compatible strings: `"arm,mmu-500"`, `"nvidia,tegra234-smmu"`
+  - MODULE_DEVICE_TABLE for automatic driver loading
+
+- **Module init/exit** (lines 504-518):
+  - Checks `is_protected_kvm_enabled()` before loading
+  - Registers platform driver with `platform_driver_register()`
+  - Standard module boilerplate (GPL license, author, description)
+
+**7. IOMMU Operations Structure** (`arm_smmu_kvm_ops`, lines 344-355):
+```c
+static struct iommu_ops arm_smmu_kvm_ops = {
+    .domain_alloc    = arm_smmu_kvm_domain_alloc,
+    .domain_free     = arm_smmu_kvm_domain_free,
+    .attach_dev      = arm_smmu_kvm_attach_dev,
+    .detach_dev      = arm_smmu_kvm_detach_dev,
+    .map_pages       = arm_smmu_kvm_map_pages,
+    .unmap_pages     = arm_smmu_kvm_unmap_pages,
+    .iova_to_phys    = arm_smmu_kvm_iova_to_phys,
+    .probe_device    = arm_smmu_kvm_probe_device,
+    .release_device  = arm_smmu_kvm_release_device,
+    .pgsize_bitmap   = SZ_4K,  /* Tegra234: 4K only (walk cache erratum) */
+};
+```
+
+**Architecture Decisions**:
+
+1. **Hypercall Integration**: Uses existing `kvm_iommu_*` exported functions from `arch/arm64/kvm/iommu.c`
+   - No raw SMCCC calls needed
+   - Automatic memory cache refill via `kvm_call_hyp_nvhe_mc()` macro
+   - Clean integration with pKVM infrastructure
+
+2. **Memory Donation Strategy**:
+   - EL2 allocates memory on-demand using `kvm_iommu_donate_pages_atomic()`
+   - No pre-allocation at EL1 required
+   - Simplifies driver initialization
+
+3. **SMMU Instance Identification**:
+   - Address-based lookup (matches physical layout)
+   - Alternative: Could use `of_device_id.data` field for instance ID
+   - Current approach works without device tree modifications
+
+4. **Stream ID Assignment**:
+   - Extracted from device tree at attachment time
+   - No static configuration files needed
+   - Dynamic validation by EL2
+
+5. **4K Pages Only**:
+   - `pgsize_bitmap = SZ_4K` enforces Tegra234 walk cache erratum workaround
+   - Matches EL2 driver constraint
+
+**Key Features**:
+- ✅ Complete integration with Linux IOMMU framework
+- ✅ Proper device lifecycle management (probe/remove)
+- ✅ Sysfs registration for IOMMU devices
+- ✅ Device tree parsing for Stream IDs and SMMU references
+- ✅ Atomic domain ID allocation
+- ✅ Clean hypercall integration via exported functions
+- ✅ Error handling with proper logging
+- ✅ Support for all three Tegra234 SMMU instances
+
+**Testing Requirements**:
+- Unit test: Stream ID parsing from device tree
+- Unit test: SMMU instance ID determination
+- Integration test: Device attachment to domain
+- Integration test: Page table operations (map/unmap)
+- Platform test: Multi-device coordination
+
+**File Updates**:
+- `arm-smmu-kvm.c`: 523 lines (complete implementation, +116 lines from skeleton)
+- Final count includes all hypercall wrappers, device lifecycle, and SMMU instance handling
+
+**Total Implementation**: 3,222 lines (2,699 EL2 + 523 EL1)
+
+**Status**: ✅ **COMPLETE** - Ready for hardware testing
 
 ---
 

@@ -20,6 +20,7 @@
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_iommu.h>
+#include <linux/of_platform.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -36,6 +37,7 @@ struct arm_smmu_kvm_domain;
 /**
  * struct arm_smmu_kvm_device - EL1 SMMU device state
  * @dev: Linux device pointer
+ * @iommu: IOMMU device for framework registration
  * @hyp_smmu_id: Hypervisor SMMU instance ID (0-2 for Tegra234)
  * @base: MMIO base address (donated to EL2, no longer accessible at EL1)
  * @size: MMIO region size
@@ -44,6 +46,7 @@ struct arm_smmu_kvm_domain;
  */
 struct arm_smmu_kvm_device {
 	struct device			*dev;
+	struct iommu_device		iommu;
 	u32				hyp_smmu_id;
 	phys_addr_t			base;
 	resource_size_t			size;
@@ -77,72 +80,75 @@ to_arm_smmu_kvm_domain(struct iommu_domain *dom)
 /*
  * Hypercall Wrappers
  *
- * TODO: Define actual hypercall interface. These are placeholders
- * based on the pKVM IOMMU infrastructure.
+ * These use the exported kvm_iommu_* functions from arch/arm64/kvm/iommu.c
+ * which handle the actual hypercalls to EL2.
  */
 
-static int kvm_smmu_init_device(u32 smmu_id, phys_addr_t base, size_t size)
+/* Global domain ID counter for allocation */
+static atomic_t next_domain_id = ATOMIC_INIT(1);
+
+/**
+ * arm_smmu_kvm_alloc_domain_id - Allocate a new domain ID
+ *
+ * Domain IDs must be unique across all IOMMUs. We use a simple atomic
+ * counter for allocation.
+ *
+ * Returns: New domain ID (>0), or negative error code
+ */
+static pkvm_handle_t arm_smmu_kvm_alloc_domain_id(void)
 {
-	/* TODO: Call __pkvm_host_iommu_init() or equivalent */
-	return -ENOSYS;
+	return atomic_inc_return(&next_domain_id);
 }
 
-static int kvm_smmu_alloc_domain(u32 smmu_id, u32 *domain_id, u32 type)
+/**
+ * arm_smmu_kvm_get_stream_id - Get Stream ID for a device
+ * @dev: Device to get Stream ID for
+ *
+ * Parses the device tree "iommus" property to extract the Stream ID.
+ * For Tegra234, the format is: iommus = <&smmu STREAM_ID>;
+ *
+ * Returns: Stream ID (0-255), or negative error code
+ */
+static int arm_smmu_kvm_get_stream_id(struct device *dev)
 {
-	/* TODO: Call __pkvm_host_iommu_alloc_domain() */
-	return -ENOSYS;
-}
+	struct of_phandle_args args;
+	int ret;
 
-static int kvm_smmu_free_domain(u32 domain_id)
-{
-	/* TODO: Call __pkvm_host_iommu_free_domain() */
-	return -ENOSYS;
-}
+	ret = of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
+					  0, &args);
+	if (ret) {
+		dev_err(dev, "failed to parse iommus property: %d\n", ret);
+		return ret;
+	}
 
-static int kvm_smmu_attach_dev(u32 smmu_id, u32 domain_id, u32 sid)
-{
-	/* TODO: Call __pkvm_host_iommu_attach_dev() */
-	return -ENOSYS;
-}
+	/*
+	 * For ARM SMMUs, args.args[0] is the Stream ID
+	 * Tegra234 uses 8-bit Stream IDs (0-255)
+	 */
+	if (args.args_count < 1) {
+		dev_err(dev, "iommus property has no Stream ID\n");
+		of_node_put(args.np);
+		return -EINVAL;
+	}
 
-static int kvm_smmu_detach_dev(u32 smmu_id, u32 domain_id, u32 sid)
-{
-	/* TODO: Call __pkvm_host_iommu_detach_dev() */
-	return -ENOSYS;
-}
+	if (args.args[0] > 255) {
+		dev_err(dev, "invalid Stream ID %u (max 255)\n", args.args[0]);
+		of_node_put(args.np);
+		return -EINVAL;
+	}
 
-static int kvm_smmu_map_pages(u32 domain_id, unsigned long iova,
-			      phys_addr_t paddr, size_t pgsize,
-			      size_t pgcount, int prot)
-{
-	/* TODO: Call __pkvm_host_iommu_map_pages() */
-	return -ENOSYS;
-}
+	of_node_put(args.np);
 
-static int kvm_smmu_unmap_pages(u32 domain_id, unsigned long iova,
-				size_t pgsize, size_t pgcount)
-{
-	/* TODO: Call __pkvm_host_iommu_unmap_pages() */
-	return -ENOSYS;
-}
-
-static phys_addr_t kvm_smmu_iova_to_phys(u32 domain_id, unsigned long iova)
-{
-	/* TODO: Call __pkvm_host_iommu_iova_to_phys() */
-	return 0;
+	return args.args[0];
 }
 
 /*
  * IOMMU Domain Operations
  */
 
-static struct iommu_domain *arm_smmu_kvm_domain_alloc(unsigned type)
+static struct iommu_domain *arm_smmu_kvm_domain_alloc(struct device *dev)
 {
 	struct arm_smmu_kvm_domain *smmu_domain;
-
-	if (type != IOMMU_DOMAIN_UNMANAGED &&
-	    type != IOMMU_DOMAIN_DMA)
-		return NULL;
 
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
@@ -157,8 +163,10 @@ static void arm_smmu_kvm_domain_free(struct iommu_domain *domain)
 {
 	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
 
-	if (smmu_domain->hyp_domain_id)
-		kvm_smmu_free_domain(smmu_domain->hyp_domain_id);
+	if (smmu_domain->hyp_domain_id) {
+		kvm_iommu_free_domain(smmu_domain->hyp_domain_id);
+		smmu_domain->hyp_domain_id = 0;
+	}
 
 	kfree(smmu_domain);
 }
@@ -168,44 +176,46 @@ static int arm_smmu_kvm_attach_dev(struct iommu_domain *domain,
 {
 	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
 	struct arm_smmu_kvm_device *smmu = dev_iommu_priv_get(dev);
-	u32 sid;
+	int sid;
 	int ret;
 
-	/* TODO: Get Stream ID from device tree or firmware */
-	sid = 0;  /* Placeholder */
+	if (!smmu) {
+		dev_err(dev, "device not associated with SMMU\n");
+		return -ENODEV;
+	}
+
+	/* Get Stream ID from device tree */
+	sid = arm_smmu_kvm_get_stream_id(dev);
+	if (sid < 0)
+		return sid;
 
 	/* Allocate domain at EL2 if not already done */
 	if (!smmu_domain->hyp_domain_id) {
-		ret = kvm_smmu_alloc_domain(smmu->hyp_smmu_id,
-					    &smmu_domain->hyp_domain_id,
-					    domain->type);
-		if (ret)
+		smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
+
+		ret = kvm_iommu_alloc_domain(smmu_domain->hyp_domain_id, domain->type);
+		if (ret) {
+			dev_err(dev, "failed to allocate domain at EL2: %d\n", ret);
+			smmu_domain->hyp_domain_id = 0;
 			return ret;
+		}
 
 		smmu_domain->smmu = smmu;
 	}
 
 	/* Attach device to domain at EL2 */
-	ret = kvm_smmu_attach_dev(smmu->hyp_smmu_id,
-				  smmu_domain->hyp_domain_id, sid);
-	if (ret)
+	ret = kvm_iommu_attach_dev(smmu->hyp_smmu_id, smmu_domain->hyp_domain_id,
+				   sid, 0 /* pasid */, 0 /* pasid_bits */, 0 /* flags */);
+	if (ret) {
+		dev_err(dev, "failed to attach SID %u to domain %u: %d\n",
+			sid, smmu_domain->hyp_domain_id, ret);
 		return ret;
+	}
+
+	dev_info(dev, "attached to SMMU domain %u (SID %u)\n",
+		 smmu_domain->hyp_domain_id, sid);
 
 	return 0;
-}
-
-static void arm_smmu_kvm_detach_dev(struct iommu_domain *domain,
-				    struct device *dev)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-	struct arm_smmu_kvm_device *smmu = dev_iommu_priv_get(dev);
-	u32 sid;
-
-	/* TODO: Get Stream ID from device tree or firmware */
-	sid = 0;  /* Placeholder */
-
-	kvm_smmu_detach_dev(smmu->hyp_smmu_id,
-			    smmu_domain->hyp_domain_id, sid);
 }
 
 static int arm_smmu_kvm_map_pages(struct iommu_domain *domain,
@@ -214,12 +224,17 @@ static int arm_smmu_kvm_map_pages(struct iommu_domain *domain,
 				  int prot, gfp_t gfp, size_t *mapped)
 {
 	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
+	size_t total_mapped = 0;
 	int ret;
 
-	ret = kvm_smmu_map_pages(smmu_domain->hyp_domain_id, iova, paddr,
-				 pgsize, pgcount, prot);
-	if (ret == 0 && mapped)
-		*mapped = pgsize * pgcount;
+	if (!smmu_domain->hyp_domain_id)
+		return -EINVAL;
+
+	ret = kvm_iommu_map_pages(smmu_domain->hyp_domain_id, iova, paddr,
+				  pgsize, pgcount, prot, gfp, &total_mapped);
+
+	if (mapped)
+		*mapped = total_mapped;
 
 	return ret;
 }
@@ -230,14 +245,12 @@ static size_t arm_smmu_kvm_unmap_pages(struct iommu_domain *domain,
 				       struct iommu_iotlb_gather *gather)
 {
 	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-	int ret;
 
-	ret = kvm_smmu_unmap_pages(smmu_domain->hyp_domain_id, iova,
-				   pgsize, pgcount);
-	if (ret)
+	if (!smmu_domain->hyp_domain_id)
 		return 0;
 
-	return pgsize * pgcount;
+	return kvm_iommu_unmap_pages(smmu_domain->hyp_domain_id, iova,
+				     pgsize, pgcount);
 }
 
 static phys_addr_t arm_smmu_kvm_iova_to_phys(struct iommu_domain *domain,
@@ -245,26 +258,48 @@ static phys_addr_t arm_smmu_kvm_iova_to_phys(struct iommu_domain *domain,
 {
 	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
 
-	return kvm_smmu_iova_to_phys(smmu_domain->hyp_domain_id, iova);
+	if (!smmu_domain->hyp_domain_id)
+		return 0;
+
+	return kvm_iommu_iova_to_phys(smmu_domain->hyp_domain_id, iova);
 }
 
 static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
 {
-	struct arm_smmu_kvm_device *smmu;
-	struct device_node *np;
+	struct arm_smmu_kvm_device *smmu = NULL;
+	struct of_phandle_args args;
+	struct platform_device *smmu_pdev;
+	int ret;
 
-	/* TODO: Properly find SMMU device from device tree */
-	np = of_parse_phandle(dev->of_node, "iommus", 0);
-	if (!np)
+	/* Parse "iommus" property to find the SMMU */
+	ret = of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
+					  0, &args);
+	if (ret) {
+		dev_dbg(dev, "no iommus property found\n");
 		return ERR_PTR(-ENODEV);
+	}
 
-	smmu = dev_get_drvdata(of_find_device_by_node(np));
-	of_node_put(np);
+	/* Find the platform device for this SMMU */
+	smmu_pdev = of_find_device_by_node(args.np);
+	of_node_put(args.np);
 
-	if (!smmu)
+	if (!smmu_pdev) {
+		dev_err(dev, "SMMU device not found\n");
 		return ERR_PTR(-ENODEV);
+	}
 
+	smmu = platform_get_drvdata(smmu_pdev);
+	platform_device_put(smmu_pdev);
+
+	if (!smmu) {
+		dev_err(dev, "SMMU driver data not set\n");
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	/* Store SMMU reference in device's IOMMU private data */
 	dev_iommu_priv_set(dev, smmu);
+
+	dev_info(dev, "probed by pKVM SMMU (hyp_id=%u)\n", smmu->hyp_smmu_id);
 
 	return &smmu->iommu;
 }
@@ -274,28 +309,59 @@ static void arm_smmu_kvm_release_device(struct device *dev)
 	dev_iommu_priv_set(dev, NULL);
 }
 
-static struct iommu_ops arm_smmu_kvm_ops = {
-	.domain_alloc		= arm_smmu_kvm_domain_alloc,
-	.domain_free		= arm_smmu_kvm_domain_free,
-	.attach_dev		= arm_smmu_kvm_attach_dev,
-	.detach_dev		= arm_smmu_kvm_detach_dev,
-	.map_pages		= arm_smmu_kvm_map_pages,
-	.unmap_pages		= arm_smmu_kvm_unmap_pages,
-	.iova_to_phys		= arm_smmu_kvm_iova_to_phys,
+static const struct iommu_ops arm_smmu_kvm_ops = {
+	.domain_alloc_paging	= arm_smmu_kvm_domain_alloc,
 	.probe_device		= arm_smmu_kvm_probe_device,
 	.release_device		= arm_smmu_kvm_release_device,
-	.pgsize_bitmap		= SZ_4K | SZ_2M | SZ_1G,
+	.owner			= THIS_MODULE,
+	.default_domain_ops = &(const struct iommu_domain_ops) {
+		.attach_dev	= arm_smmu_kvm_attach_dev,
+		.map_pages	= arm_smmu_kvm_map_pages,
+		.unmap_pages	= arm_smmu_kvm_unmap_pages,
+		.iova_to_phys	= arm_smmu_kvm_iova_to_phys,
+		.free		= arm_smmu_kvm_domain_free,
+	}
 };
 
 /*
  * Platform Driver
  */
 
+/**
+ * arm_smmu_kvm_get_smmu_id - Determine SMMU instance ID from device tree
+ * @pdev: Platform device
+ *
+ * Returns: SMMU instance ID (0-2 for Tegra234), or negative error code
+ */
+static int arm_smmu_kvm_get_smmu_id(struct platform_device *pdev)
+{
+	struct resource *res;
+	phys_addr_t base;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
+
+	base = res->start;
+
+	/* Tegra234 SMMU instance addresses (from device tree) */
+	if (base == 0x8000000 || base == 0x7000000)
+		return 0;  /* smmu_niso1 */
+	else if (base == 0x10000000)
+		return 1;  /* smmu_iso */
+	else if (base == 0x12000000 || base == 0x11000000)
+		return 2;  /* smmu_niso0 */
+
+	dev_err(&pdev->dev, "unknown SMMU MMIO base 0x%llx\n", (u64)base);
+	return -EINVAL;
+}
+
 static int arm_smmu_kvm_device_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct arm_smmu_kvm_device *smmu;
 	struct resource *res;
+	u32 reg;
 	int ret;
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
@@ -314,59 +380,76 @@ static int arm_smmu_kvm_device_probe(struct platform_device *pdev)
 	smmu->base = res->start;
 	smmu->size = resource_size(res);
 
-	/* Parse device tree for capabilities */
-	/* TODO: Read num_context_banks, num_mapping_groups from DT or probe */
+	/* Determine SMMU instance ID from base address */
+	ret = arm_smmu_kvm_get_smmu_id(pdev);
+	if (ret < 0) {
+		dev_err(dev, "failed to determine SMMU instance ID\n");
+		return ret;
+	}
+	smmu->hyp_smmu_id = ret;
+
+	/* Parse device tree for #iommu-cells (should be 1 for SMMUv2) */
+	ret = of_property_read_u32(dev->of_node, "#iommu-cells", &reg);
+	if (ret || reg != 1) {
+		dev_err(dev, "invalid or missing #iommu-cells property\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Note: We cannot read IDR registers here because EL2 owns the
+	 * SMMU hardware. The hypervisor will probe capabilities during
+	 * initialization. We use hardcoded values based on Tegra234 spec.
+	 */
 	smmu->num_context_banks = 64;
 	smmu->num_mapping_groups = 128;
 
-	/* Allocate memory to donate to EL2 */
-	/* TODO: Calculate required memory size */
-	/* Need: SMR arrays, S2CR arrays, CB state, shadow state */
-	smmu->donated_mem_size = PAGE_SIZE * 16;  /* Placeholder */
-	smmu->donated_mem = (void *)__get_free_pages(GFP_KERNEL,
-						     get_order(smmu->donated_mem_size));
-	if (!smmu->donated_mem) {
-		dev_err(dev, "failed to allocate memory for EL2\n");
-		return -ENOMEM;
-	}
+	/*
+	 * Memory donation to EL2:
+	 * EL2 needs memory for:
+	 * - SMR shadow arrays (2 * num_mapping_groups * sizeof(struct arm_smmu_smr))
+	 * - S2CR shadow arrays (2 * num_mapping_groups * sizeof(struct arm_smmu_s2cr))
+	 * - CB state (num_context_banks * sizeof(struct smmu_v2_cb_state))
+	 *
+	 * However, the actual donation is handled by EL2 via kvm_iommu_donate_pages_atomic()
+	 * when needed. We don't need to pre-allocate and donate here.
+	 */
 
-	/* Initialize SMMU at EL2 */
-	ret = kvm_smmu_init_device(smmu->hyp_smmu_id, smmu->base, smmu->size);
+	/* Initialize IOMMU device structure */
+	ret = iommu_device_sysfs_add(&smmu->iommu, dev, NULL,
+				      "smmu-kvm.%u", smmu->hyp_smmu_id);
 	if (ret) {
-		dev_err(dev, "failed to initialize SMMU at EL2: %d\n", ret);
-		goto err_free_mem;
+		dev_err(dev, "failed to register IOMMU in sysfs: %d\n", ret);
+		return ret;
 	}
 
-	/* Register with IOMMU framework */
 	ret = iommu_device_register(&smmu->iommu, &arm_smmu_kvm_ops, dev);
 	if (ret) {
 		dev_err(dev, "failed to register IOMMU device: %d\n", ret);
-		goto err_free_mem;
+		goto err_sysfs_remove;
 	}
 
 	platform_set_drvdata(pdev, smmu);
 
-	dev_info(dev, "pKVM ARM SMMUv2 driver initialized (hyp_id=%u)\n",
-		 smmu->hyp_smmu_id);
+	dev_info(dev, "pKVM ARM SMMUv2 driver initialized (hyp_id=%u, base=0x%llx)\n",
+		 smmu->hyp_smmu_id, (u64)smmu->base);
 
 	return 0;
 
-err_free_mem:
-	free_pages((unsigned long)smmu->donated_mem, get_order(smmu->donated_mem_size));
+err_sysfs_remove:
+	iommu_device_sysfs_remove(&smmu->iommu);
 	return ret;
 }
 
-static int arm_smmu_kvm_device_remove(struct platform_device *pdev)
+static void arm_smmu_kvm_device_remove(struct platform_device *pdev)
 {
 	struct arm_smmu_kvm_device *smmu = platform_get_drvdata(pdev);
 
 	iommu_device_unregister(&smmu->iommu);
+	iommu_device_sysfs_remove(&smmu->iommu);
 
 	if (smmu->donated_mem)
 		free_pages((unsigned long)smmu->donated_mem,
 			   get_order(smmu->donated_mem_size));
-
-	return 0;
 }
 
 static const struct of_device_id arm_smmu_kvm_of_match[] = {
