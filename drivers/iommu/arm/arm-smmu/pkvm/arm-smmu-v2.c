@@ -1489,32 +1489,194 @@ int smmu_v2_global_init(void)
  */
 
 /**
+ * smmu_v2_find_free_sme - Find available Stream Mapping Entry
+ * @smmu: SMMU device
+ *
+ * Finds an unused SMR/S2CR register pair. Each pair is called a
+ * Stream Mapping Entry (SME).
+ *
+ * Returns: SME index (0 to num_mapping_groups-1), or negative error code
+ */
+static int smmu_v2_find_free_sme(struct hyp_arm_smmu_v2_device *smmu)
+{
+	int i;
+
+	/* Scan hardware state array for first invalid (unused) entry */
+	for (i = 0; i < smmu->num_mapping_groups; i++) {
+		if (!smmu->smrs_hw[i].valid)
+			return i;
+	}
+
+	/* All SMEs are allocated */
+	return -ENOSPC;
+}
+
+/**
+ * smmu_v2_find_sme_by_sid - Find SME that matches a Stream ID
+ * @smmu: SMMU device
+ * @sid: Stream ID to search for
+ *
+ * Returns: SME index if found, or negative error code
+ */
+static int smmu_v2_find_sme_by_sid(struct hyp_arm_smmu_v2_device *smmu, u32 sid)
+{
+	int i;
+
+	for (i = 0; i < smmu->num_mapping_groups; i++) {
+		if (smmu->smrs_hw[i].valid && smmu->smrs_hw[i].id == sid)
+			return i;
+	}
+
+	return -ENOENT;
+}
+
+/**
  * smmu_v2_map_stream - Map a Stream ID to a context bank
  * @smmu: SMMU device
  * @sid: Stream ID
  * @cb_idx: Context bank index
  *
  * Configures SMR and S2CR registers to route traffic from @sid to @cb_idx.
+ * This is the core operation that connects a device's DMA transactions
+ * (identified by Stream ID) to an IOMMU translation context.
+ *
+ * Returns: 0 on success, negative error code on failure
  */
 int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx)
 {
-	/* TODO: Implement stream mapping */
-	/* 1. Find free SMR */
-	/* 2. Configure SMR with SID */
-	/* 3. Configure S2CR to point to CB */
-	/* 4. Update shadow state */
-	return -ENOSYS;
+	int sme_idx;
+	u32 smr_val, s2cr_val;
+
+	if (sid >= ARM_SMMU_MAX_SIDS) {
+		hyp_err("SMMU[%u]: Invalid SID %u (max %u)\n",
+			smmu->id, sid, ARM_SMMU_MAX_SIDS - 1);
+		return -EINVAL;
+	}
+
+	if (cb_idx >= smmu->num_context_banks) {
+		hyp_err("SMMU[%u]: Invalid CB index %u (max %u)\n",
+			smmu->id, cb_idx, smmu->num_context_banks - 1);
+		return -EINVAL;
+	}
+
+	/* Check if this SID is already mapped */
+	sme_idx = smmu_v2_find_sme_by_sid(smmu, sid);
+	if (sme_idx >= 0) {
+		/* Already mapped - verify it points to the correct CB */
+		if (smmu->s2crs_hw[sme_idx].cbndx == cb_idx) {
+			/* Already correctly mapped, nothing to do */
+			return 0;
+		}
+
+		/* Mapped to different CB - this is an error */
+		hyp_err("SMMU[%u]: SID %u already mapped to CB %u (tried to map to CB %u)\n",
+			smmu->id, sid, smmu->s2crs_hw[sme_idx].cbndx, cb_idx);
+		return -EEXIST;
+	}
+
+	/* Find free SME (Stream Mapping Entry) */
+	sme_idx = smmu_v2_find_free_sme(smmu);
+	if (sme_idx < 0) {
+		hyp_err("SMMU[%u]: No free stream mapping entries\n", smmu->id);
+		return sme_idx;
+	}
+
+	/*
+	 * Configure SMR (Stream Match Register):
+	 * - Set Stream ID to match
+	 * - Set mask to 0 (exact match, no masking)
+	 * - Set VALID bit to enable this entry
+	 */
+	smr_val = FIELD_PREP(ARM_SMMU_SMR_ID, sid) | ARM_SMMU_SMR_VALID;
+
+	/*
+	 * Configure S2CR (Stream-to-Context Register):
+	 * - TYPE = TRANS (translation enabled, not bypass/fault)
+	 * - CBNDX = context bank index
+	 * - PRIVCFG = 0 (use incoming transaction attributes)
+	 */
+	s2cr_val = FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_TRANS) |
+		   FIELD_PREP(ARM_SMMU_S2CR_CBNDX, cb_idx);
+
+	/* Write to hardware (both primary and secondary bases if applicable) */
+	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_SMR(sme_idx), smr_val);
+	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_S2CR(sme_idx), s2cr_val);
+
+	/* Update hardware state tracking */
+	smmu->smrs_hw[sme_idx].id = (u16)sid;
+	smmu->smrs_hw[sme_idx].mask = 0;
+	smmu->smrs_hw[sme_idx].valid = true;
+
+	smmu->s2crs_hw[sme_idx].type = S2CR_TYPE_TRANS;
+	smmu->s2crs_hw[sme_idx].cbndx = cb_idx;
+	smmu->s2crs_hw[sme_idx].privcfg = 0;
+	smmu->s2crs_hw[sme_idx].bypass = false;
+
+	/*
+	 * Also update shadow state (what host thinks hardware has).
+	 * This ensures that if host reads back these registers via
+	 * MMIO emulation, it sees the correct values.
+	 */
+	smmu->smrs_shadow[sme_idx] = smmu->smrs_hw[sme_idx];
+	smmu->s2crs_shadow[sme_idx] = smmu->s2crs_hw[sme_idx];
+
+	return 0;
 }
 
 /**
  * smmu_v2_unmap_stream - Unmap a Stream ID
  * @smmu: SMMU device
  * @sid: Stream ID
+ *
+ * Clears the SMR/S2CR registers for this Stream ID, causing all
+ * transactions from this device to fault (until remapped).
+ *
+ * Returns: 0 on success, negative error code on failure
  */
 int smmu_v2_unmap_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid)
 {
-	/* TODO: Implement stream unmapping */
-	return -ENOSYS;
+	int sme_idx;
+	u32 s2cr_val;
+
+	if (sid >= ARM_SMMU_MAX_SIDS)
+		return -EINVAL;
+
+	/* Find the SME that maps this SID */
+	sme_idx = smmu_v2_find_sme_by_sid(smmu, sid);
+	if (sme_idx < 0) {
+		/* Not mapped - this is not an error, just a no-op */
+		return 0;
+	}
+
+	/*
+	 * Clear SMR (invalidate this entry).
+	 * This causes transactions with this SID to no longer match.
+	 */
+	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_SMR(sme_idx), 0);
+
+	/*
+	 * Configure S2CR to FAULT mode.
+	 * This ensures any stray transactions (e.g., in-flight DMA)
+	 * will generate a fault rather than accessing memory.
+	 */
+	s2cr_val = FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_FAULT);
+	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_S2CR(sme_idx), s2cr_val);
+
+	/* Update hardware state tracking */
+	smmu->smrs_hw[sme_idx].id = 0;
+	smmu->smrs_hw[sme_idx].mask = 0;
+	smmu->smrs_hw[sme_idx].valid = false;
+
+	smmu->s2crs_hw[sme_idx].type = S2CR_TYPE_FAULT;
+	smmu->s2crs_hw[sme_idx].cbndx = 0;
+	smmu->s2crs_hw[sme_idx].privcfg = 0;
+	smmu->s2crs_hw[sme_idx].bypass = false;
+
+	/* Update shadow state */
+	smmu->smrs_shadow[sme_idx] = smmu->smrs_hw[sme_idx];
+	smmu->s2crs_shadow[sme_idx] = smmu->s2crs_hw[sme_idx];
+
+	return 0;
 }
 
 /*
