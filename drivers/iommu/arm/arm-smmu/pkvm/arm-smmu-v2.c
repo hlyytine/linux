@@ -11,6 +11,7 @@
 
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/io-pgtable.h>
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
 #include <nvhe/iommu.h>
@@ -18,12 +19,20 @@
 #include <nvhe/mm.h>
 
 #include "arm-smmu-v2.h"
+#include "../../../io-pgtable-arm.h"
 
 /*
  * Global State
  */
 struct hyp_arm_smmu_v2_device *kvm_hyp_arm_smmu_v2_smmus[ARM_SMMU_MAX_INSTANCES];
 struct sid_assignment sid_map[ARM_SMMU_MAX_SIDS];
+
+/*
+ * Global identity-mapped page table (protected by host_mmu.lock from core code)
+ * All protected domains share this single Stage-2 page table that mirrors
+ * the host's CPU stage-2 mappings for DMA isolation.
+ */
+static struct io_pgtable *idmap_pgtable;
 
 /*
  * ARM SMMUv2 Register Definitions
@@ -454,6 +463,114 @@ int smmu_v2_reset(struct hyp_arm_smmu_v2_device *smmu)
 	return 0;
 }
 
+/*
+ * TLB Operations for io-pgtable Integration
+ */
+
+/**
+ * smmu_v2_tlb_flush_walk - Flush TLB after unmapping non-leaf PTEs
+ * @iova: I/O virtual address
+ * @size: Size of the range to invalidate
+ * @granule: Page granule size
+ * @cookie: SMMU device (unused - we invalidate all SMMUs)
+ *
+ * Called by io-pgtable when unmapping intermediate page table entries.
+ */
+static void smmu_v2_tlb_flush_walk(unsigned long iova, size_t size,
+				   size_t granule, void *cookie)
+{
+	struct hyp_arm_smmu_v2_device *smmu;
+	int i;
+
+	/* Invalidate on ALL SMMU instances (global identity mapping) */
+	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
+		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
+		if (!smmu)
+			continue;
+
+		/* Global TLB invalidation (all VMIDs) */
+		smmu_v2_tlb_inv_context(smmu, 0);  /* CB 0 - could be any CB */
+	}
+}
+
+/**
+ * smmu_v2_tlb_add_page - Add page to TLB invalidation gather
+ * @gather: TLB gather structure (unused for SMMUv2)
+ * @iova: I/O virtual address
+ * @granule: Page granule size
+ * @cookie: SMMU device (unused)
+ *
+ * Called by io-pgtable when unmapping leaf page table entries.
+ * SMMUv2 doesn't support gather/batch TLB invalidation, so we invalidate immediately.
+ */
+static void smmu_v2_tlb_add_page(struct iommu_iotlb_gather *gather,
+				 unsigned long iova, size_t granule, void *cookie)
+{
+	/* For now, just do a full context invalidation */
+	/* TODO: Implement range-based invalidation for better performance */
+	smmu_v2_tlb_flush_walk(iova, granule, granule, cookie);
+}
+
+static const struct iommu_flush_ops smmu_v2_tlb_ops = {
+	.tlb_flush_walk	= smmu_v2_tlb_flush_walk,
+	.tlb_add_page	= smmu_v2_tlb_add_page,
+};
+
+/**
+ * smmu_v2_init_pgt - Initialize global identity-mapped page table
+ *
+ * Creates a single Stage-2 page table shared by all protected domains.
+ * This table mirrors the host's CPU stage-2 mappings for DMA isolation.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int smmu_v2_init_pgt(void)
+{
+	struct io_pgtable_cfg cfg = {
+		.tlb		= &smmu_v2_tlb_ops,
+		.ias		= 48,	/* Input address size */
+		.oas		= 48,	/* Output address size */
+		.coherent_walk	= true,
+		.pgsize_bitmap	= SZ_4K,  /* Tegra234: 4K only (walk cache erratum) */
+	};
+	struct hyp_arm_smmu_v2_device *smmu;
+	struct io_pgtable_ops *ops;
+	int i;
+
+	/* Determine common capabilities across all SMMU instances */
+	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
+		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
+		if (!smmu)
+			continue;
+
+		/* Use minimum IAS/OAS across all SMMUs */
+		if (smmu->ias < cfg.ias)
+			cfg.ias = smmu->ias;
+		if (smmu->oas < cfg.oas)
+			cfg.oas = smmu->oas;
+
+		/* AND together page size support (most restrictive) */
+		cfg.pgsize_bitmap &= smmu->pgsize_bitmap;
+
+		/* Coherent walk only if all SMMUs support it */
+		if (!(smmu->features & ARM_SMMU_FEAT_COHERENT_WALK))
+			cfg.coherent_walk = false;
+	}
+
+	/* Allocate Stage-2 page table */
+	ops = kvm_alloc_io_pgtable_ops(ARM_64_LPAE_S2, &cfg, NULL);
+	if (!ops)
+		return -ENOMEM;
+
+	idmap_pgtable = io_pgtable_ops_to_pgtable(ops);
+	if (!idmap_pgtable) {
+		/* This shouldn't happen, but handle it anyway */
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
 /**
  * smmu_v2_init - Initialize SMMU device at EL2
  * @smmu: SMMU device structure
@@ -658,22 +775,109 @@ void smmu_v2_free_context_bank(struct hyp_arm_smmu_v2_device *smmu, u8 idx)
  * @cb_idx: Context bank index
  *
  * Programs CBAR, TTBR, TCR, and other CB registers for Stage-2 translation.
+ * Uses the global identity-mapped page table (idmap_pgtable) which mirrors
+ * the host's CPU stage-2 mappings.
  */
 int smmu_v2_init_context_bank(struct hyp_arm_smmu_v2_device *smmu,
 			       struct kvm_hyp_iommu_domain *domain, u8 cb_idx)
 {
 	struct smmu_v2_cb_state *cb = &smmu->cb_state[cb_idx];
+	struct io_pgtable_cfg *pgt_cfg;
+	u32 cbar, vtcr, sctlr, cb_page;
+	u64 ttbr0, mair;
 
 	if (cb_idx >= smmu->num_context_banks)
 		return -EINVAL;
 
-	/* TODO: Implement CB initialization */
-	/* 1. Configure CBAR for Stage-2 translation */
-	/* 2. Set TTBR0 to domain's page table */
-	/* 3. Configure TCR (TG0, SH0, ORGN0, IRGN0, T0SZ) */
-	/* 4. Enable SCTLR.M */
+	if (WARN_ON(!idmap_pgtable))
+		return -EINVAL;
 
-	cb->domain_id = domain->id;
+	pgt_cfg = &idmap_pgtable->cfg;
+
+	/* Calculate CB page offset: context banks start at page (2 + cb_idx) */
+	cb_page = (cb_idx + 2) << smmu->pgshift;
+
+	/* 1. Configure CBAR (Context Bank Attribute Register) for Stage-2 only */
+	cbar = FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S2_TRANS);
+	cbar |= FIELD_PREP(ARM_SMMU_CBAR_VMID, 0);  /* VMID = 0 (global identity mapping) */
+	smmu_writel(smmu, ARM_SMMU_GR1, ARM_SMMU_GR1_CBAR(cb_idx), cbar);
+
+	/* Configure CBA2R (extended attributes) for 64-bit addressing */
+	smmu_writel(smmu, ARM_SMMU_GR1, ARM_SMMU_GR1_CBA2R(cb_idx),
+		    ARM_SMMU_CBA2R_VA64);
+
+	/* 2. Program VTCR via TCR2 register for Stage-2 translation control */
+	vtcr = ARM_SMMU_VTCR_RES1;  /* Reserved bit that must be 1 */
+
+	/* Extract configuration from global page table */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.ps << 16);    /* Physical address size */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.tg << 14);    /* Translation granule */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.sh << 12);    /* Shareability */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.orgn << 10);  /* Outer cacheability */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.irgn << 8);   /* Inner cacheability */
+	vtcr |= (pgt_cfg->arm_lpae_s2_cfg.vtcr.sl << 6);     /* Start level */
+	vtcr |= (64 - pgt_cfg->ias);                          /* T0SZ: input address size */
+
+	smmu_writeq(smmu, cb_page, ARM_SMMU_CB_TCR2, vtcr);
+
+	/* 3. Write TTBR0 with Stage-2 page table base address */
+	ttbr0 = pgt_cfg->arm_lpae_s2_cfg.vttbr;
+	smmu_writeq(smmu, cb_page, ARM_SMMU_CB_TTBR0, ttbr0);
+
+	/* 4. Configure MAIR (Memory Attribute Indirection Register) */
+	mair = pgt_cfg->arm_lpae_s2_cfg.mair;
+	smmu_writeq(smmu, cb_page, ARM_SMMU_CB_S1_MAIR0, mair);
+
+	/* 5. Enable translation by setting SCTLR.M bit */
+	sctlr = ARM_SMMU_SCTLR_M;        /* Enable MMU */
+	sctlr |= ARM_SMMU_SCTLR_TRE;     /* TEX remap enable */
+	sctlr |= ARM_SMMU_SCTLR_AFE;     /* Access flag enable */
+	sctlr |= ARM_SMMU_SCTLR_CFIE;    /* Context fault interrupt enable */
+	sctlr |= ARM_SMMU_SCTLR_CFRE;    /* Context fault report enable */
+	smmu_writel(smmu, cb_page, ARM_SMMU_CB_SCTLR, sctlr);
+
+	/* Update CB state tracking */
+	cb->domain_id = domain->domain_id;
+	cb->cbar = cbar;
+	cb->vtcr = vtcr;
+	cb->ttbr0_s2 = ttbr0;
+	cb->sctlr = sctlr;
+	cb->vmid = 0;  /* Global VMID for identity mapping */
+	cb->active = true;
+
+	return 0;
+}
+
+/**
+ * smmu_v2_global_init - Global initialization for all SMMU instances
+ *
+ * Called once during hypervisor initialization to set up all SMMU devices
+ * and create the global identity-mapped page table.
+ *
+ * This should be called from the kvm_iommu_ops->init() callback.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+int smmu_v2_global_init(void)
+{
+	struct hyp_arm_smmu_v2_device *smmu;
+	int i, ret;
+
+	/* Initialize each SMMU instance */
+	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
+		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
+		if (!smmu)
+			continue;
+
+		ret = smmu_v2_init(smmu);
+		if (WARN_ON(ret))
+			return ret;
+	}
+
+	/* Initialize global identity-mapped page table (shared by all SMMUs) */
+	ret = smmu_v2_init_pgt();
+	if (WARN_ON(ret))
+		return ret;
 
 	return 0;
 }
