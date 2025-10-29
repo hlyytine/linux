@@ -288,11 +288,11 @@ static const struct mc_client_info tegra234_mc_clients[] = {
 
 ### Implementation Status
 
-#### Current Status: Phase 1 Complete - Hardware Initialization
+#### Current Status: Phase 2 Complete - Context Bank Management and Page Table Initialization
 
 **Date Completed**: 2025-10-29
 
-Phase 1 hardware initialization is complete. The EL2 driver can now probe hardware capabilities, perform complete reset sequences, and initialize all data structures. Full ARM SMMUv2 register definitions have been imported and core initialization functions are implemented.
+Phase 1 (hardware initialization) and Phase 2 (context bank management with Stage-2 translation) are complete. The EL2 driver can now probe hardware capabilities, perform complete reset sequences, initialize all data structures, create global identity-mapped page tables, and configure context banks with Stage-2-only translation for protected domains.
 
 #### Completed Work
 
@@ -305,15 +305,15 @@ Phase 1 hardware initialization is complete. The EL2 driver can now probe hardwa
   - `drivers/iommu/arm/arm-smmu/Makefile` - Added pkvm/ subdirectory and arm-smmu-kvm.o
   - `drivers/iommu/arm/arm-smmu/pkvm/Makefile` - Builds arm-smmu-v2.o and tegra234-mc.o
 
-**2. Core EL2 Driver - Phase 1 Complete** ✓
-- **File**: `drivers/iommu/arm/arm-smmu/pkvm/arm-smmu-v2.c` (845 lines)
+**2. Core EL2 Driver - Phase 1 & 2 Complete** ✓
+- **File**: `drivers/iommu/arm/arm-smmu/pkvm/arm-smmu-v2.c` (1045 lines)
 - **Contents**:
   - **Complete ARM SMMUv2 register definitions** (148 definitions)
     - GR0 registers: sCR0, IDR0-7, SMR, S2CR, GFAR, GFSR, TLB operations
     - GR1 registers: CBAR, CBA2R
     - CB registers: SCTLR, TTBR0/1, TCR, TCR2, MAIR, FSR, FSYNR
     - All field masks and bit positions for register programming
-  - **Hardware initialization (IMPLEMENTED)**:
+  - **Phase 1: Hardware initialization (IMPLEMENTED)**:
     - `smmu_v2_probe_device()` - Complete hardware capability probing
       - Parses ID0-ID7 registers for features, address sizes, context bank counts
       - Detects Stage-1/Stage-2 translation support
@@ -329,6 +329,24 @@ Phase 1 hardware initialization is complete. The EL2 driver can now probe hardwa
       - Initializes context bank bitmap and state
       - Initializes shadow SMR/S2CR arrays to safe fault state
       - Calls probe and reset sequence
+  - **Phase 2: Context Bank and Page Table Management (IMPLEMENTED)**:
+    - `smmu_v2_init_pgt()` - Global page table creation (lines 525-570)
+      - Creates single identity-mapped Stage-2 page table shared by all domains
+      - Configures io_pgtable with ARM_64_LPAE_S2 format
+      - Sets 4K page size only (Tegra234 erratum workaround)
+      - Registers TLB callback operations for page table operations
+    - `smmu_v2_init_context_bank()` - CB configuration for Stage-2 translation (lines 771-849)
+      - Programs CBAR with CBAR_TYPE_S2_TRANS for protected domains
+      - Configures VTCR via TCR2 register (physical address size, granule, cacheability)
+      - Writes TTBR0 with Stage-2 page table base from global idmap_pgtable
+      - Enables MMU by setting SCTLR.M bit
+    - `smmu_v2_global_init()` - Initialize all SMMU instances (lines 857-887)
+      - Creates global identity page table via smmu_v2_init_pgt()
+      - Initializes all SMMU instances via smmu_v2_init()
+    - TLB callback operations (lines 477-515):
+      - `smmu_v2_tlb_flush_walk()` - Called when unmapping non-leaf PTEs
+      - `smmu_v2_tlb_add_page()` - Called when unmapping leaf PTEs
+      - Both invalidate all TLBs across all SMMU instances for simplicity
   - MMIO emulation framework:
     - `smmu_v2_mmio_handler()` - Main trap entry point
     - `smmu_v2_handle_gr0()` - GR0 register handler stub
@@ -337,7 +355,6 @@ Phase 1 hardware initialization is complete. The EL2 driver can now probe hardwa
   - Context bank management:
     - `smmu_v2_alloc_context_bank()` - Bitmap-based CB allocation (implemented)
     - `smmu_v2_free_context_bank()` - CB release (implemented)
-    - `smmu_v2_init_context_bank()` - CB configuration stub
   - Stream mapping stubs (`smmu_v2_map_stream`, `smmu_v2_unmap_stream`)
   - TLB operation stubs:
     - `smmu_v2_tlb_sync_global()` - Basic polling implementation
@@ -348,7 +365,7 @@ Phase 1 hardware initialization is complete. The EL2 driver can now probe hardwa
     - `smmu_v2_assign_sid()` - Track SID assignments (implemented)
     - `smmu_v2_release_sid()` - Release SID assignments (implemented)
     - `smmu_v2_lookup_sid()` - Query SID ownership (implemented)
-  - Global state arrays: `kvm_hyp_arm_smmu_v2_smmus[]`, `sid_map[]`
+  - Global state arrays: `kvm_hyp_arm_smmu_v2_smmus[]`, `sid_map[]`, `idmap_pgtable`
 
 **3. MC Integration Skeleton** ✓
 - **File**: `drivers/iommu/arm/arm-smmu/pkvm/tegra234-mc.c` (316 lines)
@@ -399,10 +416,11 @@ The following areas contain stub functions marked with `TODO` comments:
 1. ✓ Hardware capability probing - Parse ID0-ID7 registers properly (COMPLETE)
 2. ✓ Hardware reset sequence - Clear faults, invalidate TLBs, configure sCR0 (COMPLETE)
 3. ✓ Shadow state initialization - Initialize SMR/S2CR shadow arrays (COMPLETE)
-4. ✗ GR0/GR1/CB register emulation - Implement actual register handling logic
-5. ✗ Context bank initialization - Program CBAR, TTBR, TCR, SCTLR for Stage-2
-6. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
-7. ✗ TLB operation implementation - Proper IOVA range invalidation
+4. ✓ Global page table creation - Create identity-mapped Stage-2 page table (COMPLETE)
+5. ✓ Context bank initialization - Program CBAR, TTBR, VTCR, SCTLR for Stage-2 (COMPLETE)
+6. ✗ GR0/GR1/CB register emulation - Implement actual register handling logic
+7. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
+8. ✗ TLB operation implementation - Proper IOVA range invalidation
 
 **MC Integration:**
 1. ✗ MC MMIO region mapping - Map as shared memory with EL2
@@ -428,28 +446,33 @@ drivers/iommu/arm/arm-smmu/
 ├── Makefile                     # Updated with pkvm/ subdir
 └── pkvm/
     ├── Makefile                 # Builds arm-smmu-v2.o and tegra234-mc.o
-    ├── arm-smmu-v2.h            # All data structures (280 lines)
-    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1 complete (845 lines)
+    ├── arm-smmu-v2.h            # All data structures (282 lines)
+    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1 & 2 complete (1045 lines)
     └── tegra234-mc.c            # MC integration skeleton (316 lines)
 
 drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 ```
 
-**Total Lines**: 1,848 lines (845 working implementation + 1,003 skeleton code)
+**Total Lines**: 2,050 lines (1,045 working implementation + 1,005 skeleton code)
 
 #### Next Steps
 
-Proceed with **Phase 2: Context Bank Management - Stage-2 Translation**:
+Proceed with **Phase 3: TLB Operations**:
 
-1. Implement `smmu_v2_init_context_bank()` - configure CBAR for Stage-2-only translation
-2. Program VTCR via TCR2 register for Stage-2 translation control
-3. Write TTBR0 with Stage-2 page table base address
-4. Enable translation by setting SCTLR.M bit
+1. Implement proper IOVA range invalidation in `smmu_v2_tlb_inv_range()`
+   - Calculate number of pages in range
+   - Use TLBIVA (address-based invalidation) for small ranges
+   - Fall back to TLBIVMID (full context invalidation) for large ranges
+2. Implement context-specific TLB sync in `smmu_v2_tlb_sync_context()`
+   - Poll CB_TLBSTATUS register for completion
+   - Add timeout handling (~1 second)
+3. Add error handling and recovery for TLB sync timeouts
 
-After Phase 2, continue with:
-- **Phase 3**: TLB Operations (proper invalidation with timeouts)
-- **Phase 4**: MMIO Emulation and Shadow State
-- **Phase 5**: Stream Mapping
+After Phase 3, continue with:
+- **Phase 4**: MMIO Emulation and Shadow State - Implement GR0/GR1/CB register handlers
+- **Phase 5**: Stream Mapping - Configure SMR/S2CR hardware registers
+- **Phase 6**: MC Integration - SID validation and MMIO trapping
+- **Phase 7**: Device Lifecycle - Domain attach/detach, page table operations
 
 See **Implementation Phases** section below for detailed breakdown.
 
