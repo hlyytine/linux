@@ -20,6 +20,7 @@
 #include <nvhe/alloc.h>
 #include <nvhe/alloc_mgt.h>
 #include <nvhe/iommu.h>
+#include <nvhe/serial.h>
 #include <nvhe/ffa.h>
 #include <nvhe/mem_protect.h>
 #include <nvhe/modules.h>
@@ -1680,7 +1681,9 @@ static void handle___pkvm_host_iommu_alloc_domain(struct kvm_cpu_context *host_c
 	DECLARE_REG(pkvm_handle_t, domain, host_ctxt, 2);
 	DECLARE_REG(int, type, host_ctxt, 3);
 
+	HYP_ERR("handler: alloc_domain iommu=%u domain=%u type=%d", iommu_id, domain, type);
 	ret = kvm_iommu_alloc_domain(iommu_id, domain, type);
+	HYP_ERR("handler: alloc_domain ret=%d", ret);
 	hyp_reqs_smccc_encode(ret, host_ctxt, this_cpu_ptr(&host_hyp_reqs));
 }
 
@@ -1731,6 +1734,7 @@ static void handle___pkvm_host_iommu_map_pages(struct kvm_cpu_context *host_ctxt
 	DECLARE_REG(size_t, pgcount, host_ctxt, 5);
 	DECLARE_REG(unsigned int, prot, host_ctxt, 6);
 
+	HYP_ERR("handler: map_pages domain=%u iova=0x%lx", domain, iova);
 	ret = kvm_iommu_map_pages(domain, iova, paddr,
 				  pgsize, pgcount, prot, &mapped);
 	cpu_reg(host_ctxt, 0) = ret;
@@ -1764,6 +1768,19 @@ static void handle___pkvm_host_hvc_pd(struct kvm_cpu_context *host_ctxt)
 	DECLARE_REG(u64, on, host_ctxt, 2);
 
 	cpu_reg(host_ctxt, 1) = pkvm_host_hvc_pd(device_id, on);
+}
+
+/* Forward declaration for MC SID registration (defined in tegra234-mc.c) */
+int mc_register_sid_mapping(u32 client_id, u32 sid);
+
+static void handle___pkvm_mc_register_sid(struct kvm_cpu_context *host_ctxt)
+{
+	int ret;
+	DECLARE_REG(u32, client_id, host_ctxt, 1);
+	DECLARE_REG(u32, sid, host_ctxt, 2);
+
+	ret = mc_register_sid_mapping(client_id, sid);
+	hyp_reqs_smccc_encode(ret, host_ctxt, this_cpu_ptr(&host_hyp_reqs));
 }
 
 typedef void (*hcall_t)(struct kvm_cpu_context *);
@@ -1841,6 +1858,7 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__pkvm_host_iommu_unmap_pages),
 	HANDLE_FUNC(__pkvm_host_iommu_iova_to_phys),
 	HANDLE_FUNC(__pkvm_host_hvc_pd),
+	HANDLE_FUNC(__pkvm_mc_register_sid),
 };
 
 static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
@@ -1848,6 +1866,19 @@ static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
 	DECLARE_REG(unsigned long, id, host_ctxt, 0);
 	unsigned long hcall_min = 0;
 	hcall_t hfn;
+	unsigned long raw_id = id;
+	unsigned long func_id = (id & ~ARM_SMCCC_CALL_HINTS) - KVM_HOST_SMCCC_ID(0);
+
+	/* UNCONDITIONAL DEBUG: trace if this is an IOMMU-related hypercall */
+	if (func_id >= 61 && func_id <= 70) {
+		HYP_ERR("HCALL ENTRY: raw=0x%lx func=%lu", raw_id, func_id);
+	}
+
+	/* Debug: trace ALL IOMMU hypercalls including alloc_domain (ID 61) */
+	if ((id & ~ARM_SMCCC_CALL_HINTS) >= KVM_HOST_SMCCC_ID(__KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_alloc_domain) &&
+	    (id & ~ARM_SMCCC_CALL_HINTS) <= KVM_HOST_SMCCC_ID(__KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_iova_to_phys)) {
+		HYP_INFO("hcall entry: raw_id=0x%08lx", raw_id);
+	}
 
 	/*
 	 * If pKVM has been initialised then reject any calls to the
@@ -1864,15 +1895,31 @@ static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
 	id &= ~ARM_SMCCC_CALL_HINTS;
 	id -= KVM_HOST_SMCCC_ID(0);
 
+	/* Debug: trace IOMMU hypercalls after ID conversion */
+	if (id >= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_alloc_domain &&
+	    id <= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_iova_to_phys) {
+		HYP_INFO("hcall: id=%lu min=%lu max=%zu", id, hcall_min, ARRAY_SIZE(host_hcall));
+	}
+
 	if (handle_host_dynamic_hcall(&host_ctxt->regs, id) == HCALL_HANDLED)
 		goto end;
 
-	if (unlikely(id < hcall_min || id >= ARRAY_SIZE(host_hcall)))
+	if (unlikely(id < hcall_min || id >= ARRAY_SIZE(host_hcall))) {
+		if (id >= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_alloc_domain &&
+		    id <= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_iova_to_phys) {
+			HYP_ERR("BOUNDS FAIL: id=%lu min=%lu max=%zu", id, hcall_min, ARRAY_SIZE(host_hcall));
+		}
 		goto inval;
+	}
 
 	hfn = host_hcall[id];
-	if (unlikely(!hfn))
+	if (unlikely(!hfn)) {
+		if (id >= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_alloc_domain &&
+		    id <= __KVM_HOST_SMCCC_FUNC___pkvm_host_iommu_iova_to_phys) {
+			HYP_ERR("NULL HANDLER: id=%lu", id);
+		}
 		goto inval;
+	}
 
 	cpu_reg(host_ctxt, 0) = SMCCC_RET_SUCCESS;
 	hfn(host_ctxt);
@@ -1881,8 +1928,10 @@ end:
 
 	return;
 inval:
+	HYP_ERR("handle_host_hcall: INVALID id=%lu hcall_min=%lu max=%lu", id, hcall_min, (unsigned long)ARRAY_SIZE(host_hcall));
 	trace_host_hcall(id, 1);
 	cpu_reg(host_ctxt, 0) = SMCCC_RET_NOT_SUPPORTED;
+	cpu_reg(host_ctxt, 1) = -ENODEV;  /* Explicit error code for a1 */
 }
 
 static void handle_host_smc(struct kvm_cpu_context *host_ctxt)
@@ -1912,10 +1961,20 @@ static void handle_host_smc(struct kvm_cpu_context *host_ctxt)
 void handle_trap(struct kvm_cpu_context *host_ctxt)
 {
 	u64 esr = read_sysreg_el2(SYS_ESR);
+	unsigned long ec = ESR_ELx_EC(esr);
+
+	/* DEBUG: Trace ALL traps to see if alloc_domain HVC reaches here */
+	if (ec == ESR_ELx_EC_HVC64) {
+		unsigned long func_id = cpu_reg(host_ctxt, 0);
+		func_id = (func_id & ~ARM_SMCCC_CALL_HINTS) - KVM_HOST_SMCCC_ID(0);
+		if (func_id >= 61 && func_id <= 70) {
+			HYP_ERR("TRAP ENTRY: ec=%lu func=%lu", ec, func_id);
+		}
+	}
 
 	__hyp_enter();
 
-	switch (ESR_ELx_EC(esr)) {
+	switch (ec) {
 	case ESR_ELx_EC_HVC64:
 		handle_host_hcall(host_ctxt);
 		break;

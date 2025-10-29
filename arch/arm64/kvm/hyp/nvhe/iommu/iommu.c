@@ -13,6 +13,7 @@
 
 #include <nvhe/iommu.h>
 #include <nvhe/mem_protect.h>
+#include <nvhe/serial.h>
 #include <nvhe/mm.h>
 #include <nvhe/spinlock.h>
 
@@ -249,12 +250,23 @@ int kvm_iommu_alloc_domain(pkvm_handle_t iommu_id, pkvm_handle_t domain_id, int 
 	int ret = -EINVAL;
 	struct kvm_hyp_iommu_domain *domain;
 
-	if (!kvm_iommu_ops || !kvm_iommu_ops->alloc_domain)
+	HYP_INFO("alloc_domain: entry iommu=%u domain=%u type=%d ops=%p",
+		 iommu_id, domain_id, type, kvm_iommu_ops);
+
+	if (!kvm_iommu_ops) {
+		HYP_ERR("alloc_domain: kvm_iommu_ops is NULL");
 		return -ENODEV;
+	}
+	if (!kvm_iommu_ops->alloc_domain) {
+		HYP_ERR("alloc_domain: alloc_domain callback is NULL");
+		return -ENODEV;
+	}
 
 	domain = handle_to_domain(domain_id);
-	if (!domain)
+	if (!domain) {
+		HYP_ERR("alloc_domain: domain_id %u >= MAX_DOMAINS", domain_id);
 		return -ENOMEM;
+	}
 
 	hyp_spin_lock(&kvm_iommu_domain_lock);
 	if (atomic_read(&domain->refs))
@@ -282,6 +294,7 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 {
 	int ret = 0;
 	struct kvm_hyp_iommu_domain *domain;
+	int old_refs;
 
 	if (!kvm_iommu_ops || !kvm_iommu_ops->free_domain)
 		return -ENODEV;
@@ -291,8 +304,23 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 		return -EINVAL;
 
 	hyp_spin_lock(&kvm_iommu_domain_lock);
-	if (WARN_ON(atomic_cmpxchg_acquire(&domain->refs, 1, 0) != 1)) {
-		ret = -EINVAL;
+
+	/*
+	 * Check reference count before freeing:
+	 * - refs == 0: Domain was never successfully allocated (alloc failed),
+	 *              nothing to free, just return success
+	 * - refs == 1: Normal case, proceed with freeing
+	 * - refs > 1:  Domain still has references (devices attached or other
+	 *              holders), cannot free yet
+	 */
+	old_refs = atomic_cmpxchg_acquire(&domain->refs, 1, 0);
+	if (old_refs == 0) {
+		/* Domain was never successfully allocated, nothing to free */
+		goto out_unlock;  /* Return success (ret = 0) */
+	}
+	if (old_refs != 1) {
+		/* Domain still has active references, cannot free */
+		ret = -EBUSY;
 		goto out_unlock;
 	}
 

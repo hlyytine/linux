@@ -10,8 +10,16 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
+#include <linux/delay.h>
 
 #include <soc/tegra/mc.h>
+
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+#include <linux/arm-smccc.h>
+#include <asm/kvm_asm.h>
+#include <asm/virt.h>
+#endif
 
 #if defined(CONFIG_ARCH_TEGRA_186_SOC)
 #include <dt-bindings/memory/tegra186-mc.h>
@@ -22,6 +30,218 @@
 #define MC_SID_STREAMID_OVERRIDE_MASK GENMASK(7, 0)
 #define MC_SID_STREAMID_SECURITY_WRITE_ACCESS_DISABLED BIT(16)
 #define MC_SID_STREAMID_SECURITY_OVERRIDE BIT(8)
+
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+/* Deferred SID enumeration workqueue (waits for pKVM initialization) */
+static struct delayed_work sid_enum_work;
+static struct tegra_mc *sid_enum_mc;
+static bool sid_enum_done;
+
+/**
+ * tegra186_mc_enumerate_sids() - Enumerate all Stream ID assignments from device tree
+ * @mc: Memory controller instance
+ *
+ * Walks the device tree to find all devices with both 'iommus' and 'interconnects'
+ * properties. For each device:
+ * 1. Extract Stream ID from iommus property
+ * 2. Extract MC client ID(s) from interconnects property
+ * 3. Register the SID→client mapping with EL2 hypervisor
+ *
+ * This ensures EL2 knows the complete SID assignment table before any devices
+ * attempt IOMMU attachment, eliminating race conditions with device probing.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
+{
+	struct device_node *np;
+	struct of_phandle_args iommu_args, ic_args;
+	const struct tegra_mc_client *client;
+	u32 sid;
+	int err, i;
+
+	dev_info(mc->dev, "MC: Enumerating Stream ID assignments for pKVM\n");
+
+	/* Walk all device tree nodes with "iommus" property */
+	for_each_node_with_property(np, "iommus") {
+		struct device_node *iommu_np;
+
+		/* Skip if no interconnects property (not an MC client) */
+		if (!of_find_property(np, "interconnects", NULL))
+			continue;
+
+		/* Extract Stream ID from iommus property */
+		err = of_parse_phandle_with_args(np, "iommus", "#iommu-cells",
+						  0, &iommu_args);
+		if (err) {
+			dev_warn(mc->dev, "MC: Failed to parse iommus for %pOF: %d\n",
+				 np, err);
+			continue;
+		}
+
+		/* Stream ID is first argument, save SMMU node for fwspec init */
+		sid = iommu_args.args[0];
+		iommu_np = iommu_args.np;
+
+		/* Parse interconnects property to find MC client IDs */
+		i = 0;
+		while (!of_parse_phandle_with_args(np, "interconnects",
+						     "#interconnect-cells",
+						     i * 2, &ic_args)) {
+			u32 client_id = ic_args.args[0];
+			of_node_put(ic_args.np);
+
+			/* Find client in MC's client table */
+			for (client = mc->soc->clients;
+			     client < mc->soc->clients + mc->soc->num_clients;
+			     client++) {
+				if (client->id == client_id) {
+					struct arm_smccc_res res;
+					struct device *dev;
+					struct platform_device *pdev;
+
+					dev_info(mc->dev,
+						 "MC: Device %pOF: client %s (0x%x) → SID 0x%x\n",
+						 np, client->name, client_id, sid);
+
+					/* Register with EL2 hypervisor via SMCCC */
+					arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_mc_register_sid),
+							  client_id, sid, 0, 0, 0, 0, 0, &res);
+					err = (int)res.a1;  /* Return value is in X1, not X0 */
+					if (err) {
+						dev_err(mc->dev,
+							"MC: Failed to register SID mapping: %d\n",
+							err);
+						return err;
+					}
+
+					/*
+					 * Populate iommu_fwspec for device drivers that query
+					 * their Stream ID via tegra_dev_iommu_get_stream_id().
+					 * We do this during early MC enumeration (arch_initcall)
+					 * so fwspec is ready before device probe.
+					 */
+					pdev = of_find_device_by_node(np);
+					if (pdev) {
+						dev = &pdev->dev;
+
+						/* Initialize fwspec if not already done */
+						err = iommu_fwspec_init(dev, &iommu_np->fwnode);
+						if (err && err != -EEXIST) {
+							dev_warn(mc->dev,
+								 "MC: Failed to init fwspec for %pOF: %d\n",
+								 np, err);
+						} else {
+							struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+							bool already_added = false;
+							int j;
+
+							/*
+							 * Check if SID already exists (avoid duplicates).
+							 * Multiple MC clients (read/write) can share the same SID.
+							 */
+							if (fwspec) {
+								for (j = 0; j < fwspec->num_ids; j++) {
+									if (fwspec->ids[j] == sid) {
+										already_added = true;
+										break;
+									}
+								}
+							}
+
+							if (!already_added) {
+								/* Add Stream ID to fwspec */
+								err = iommu_fwspec_add_ids(dev, &sid, 1);
+								if (err) {
+									dev_warn(mc->dev,
+										 "MC: Failed to add SID to fwspec for %pOF: %d\n",
+										 np, err);
+								} else {
+									dev_info(mc->dev,
+										 "MC: Added SID 0x%x to fwspec for %pOF\n",
+										 sid, np);
+								}
+							} else {
+								dev_dbg(mc->dev,
+									"MC: SID 0x%x already in fwspec for %pOF (shared by multiple clients)\n",
+									sid, np);
+							}
+						}
+
+						platform_device_put(pdev);
+					} else {
+						dev_dbg(mc->dev,
+							"MC: Device not found for %pOF (will populate fwspec later)\n",
+							np);
+					}
+
+					break;
+				}
+			}
+
+			i++;
+		}
+
+		/* Release SMMU device node reference */
+		of_node_put(iommu_np);
+	}
+
+	dev_info(mc->dev, "MC: Stream ID enumeration complete\n");
+	return 0;
+}
+
+/**
+ * pkvm_is_available() - Check if pKVM hypervisor is ready
+ *
+ * Makes a test hypercall to verify pKVM is initialized and accepting calls.
+ * Returns true if pKVM is ready, false otherwise (HVC_STUB_ERR means not ready).
+ */
+static bool pkvm_is_available(void)
+{
+	struct arm_smccc_res res;
+
+	/*
+	 * Try a benign hypercall that should succeed if pKVM is initialized.
+	 * We use __pkvm_prot_finalize with invalid arguments - it will return
+	 * an error, but NOT HVC_STUB_ERR if pKVM is running.
+	 */
+	arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_prot_finalize),
+			  0, 0, 0, 0, 0, 0, 0, &res);
+
+	/* HVC_STUB_ERR means pKVM not initialized yet */
+	return res.a0 != HVC_STUB_ERR;
+}
+
+/**
+ * tegra186_mc_sid_enum_work() - Deferred work to enumerate SIDs when pKVM is ready
+ * @work: Work structure
+ *
+ * This function is called periodically until pKVM is initialized, then performs
+ * the SID enumeration. This avoids calling hypercalls before pKVM is ready.
+ */
+static void tegra186_mc_sid_enum_work(struct work_struct *work)
+{
+	int err;
+
+	if (sid_enum_done)
+		return;
+
+	/* Check if pKVM is ready */
+	if (!pkvm_is_available()) {
+		/* Not ready yet, try again in 100ms */
+		schedule_delayed_work(&sid_enum_work, msecs_to_jiffies(100));
+		return;
+	}
+
+	/* pKVM is ready, perform enumeration */
+	dev_info(sid_enum_mc->dev, "MC: pKVM is ready, enumerating SIDs now\n");
+	err = tegra186_mc_enumerate_sids(sid_enum_mc);
+	if (err)
+		dev_err(sid_enum_mc->dev, "MC: SID enumeration failed: %d\n", err);
+
+	sid_enum_done = true;
+}
+#endif /* CONFIG_ARM_SMMU_V2_PKVM */
 
 static int tegra186_mc_probe(struct tegra_mc *mc)
 {
@@ -72,6 +292,19 @@ populate:
 	err = of_platform_populate(mc->dev->of_node, NULL, NULL, mc->dev);
 	if (err < 0)
 		return err;
+
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+	/*
+	 * Schedule deferred SID enumeration work.
+	 * This will retry periodically until pKVM is initialized, then
+	 * enumerate all SID assignments before devices attach to IOMMU.
+	 */
+	sid_enum_mc = mc;
+	sid_enum_done = false;
+	INIT_DELAYED_WORK(&sid_enum_work, tegra186_mc_sid_enum_work);
+	schedule_delayed_work(&sid_enum_work, 0);
+	dev_info(&pdev->dev, "MC: Scheduled deferred SID enumeration (waiting for pKVM)\n");
+#endif
 
 	return 0;
 }

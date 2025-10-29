@@ -8,6 +8,7 @@
 
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_pkvm.h>
+#include <asm/virt.h>
 
 #define kvm_call_hyp_nvhe_mc(...)					\
 ({									\
@@ -134,10 +135,22 @@ int kvm_iommu_detach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 }
 EXPORT_SYMBOL(kvm_iommu_detach_dev);
 
-int kvm_iommu_alloc_domain(pkvm_handle_t domain_id, int type)
+int kvm_iommu_alloc_domain(pkvm_handle_t iommu_id, pkvm_handle_t domain_id, int type)
 {
+	/*
+	 * pKVM EL2 must be active before we can allocate domains.
+	 * Return -EPROBE_DEFER if called before pKVM is initialized,
+	 * which causes the IOMMU driver to defer probing until later.
+	 *
+	 * Note: is_protected_kvm_enabled() checks CPU cap which is set early.
+	 * We need is_pkvm_initialized() which checks the static key set AFTER
+	 * the EL2 hypervisor handler is actually installed.
+	 */
+	if (!is_pkvm_initialized())
+		return -EPROBE_DEFER;
+
 	return kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
-				    domain_id, type);
+				    iommu_id, domain_id, type);
 }
 EXPORT_SYMBOL(kvm_iommu_alloc_domain);
 

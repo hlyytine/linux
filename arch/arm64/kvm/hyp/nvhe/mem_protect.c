@@ -413,8 +413,9 @@ int __pkvm_prot_finalize(void)
 	struct kvm_s2_mmu *mmu = &host_mmu.arch.mmu;
 	struct kvm_nvhe_init_params *params = this_cpu_ptr(&kvm_init_params);
 
+	/* If already finalized on this CPU, return success (idempotent) */
 	if (params->hcr_el2 & HCR_VM)
-		return -EPERM;
+		return 0;
 
 	params->vttbr = kvm_get_vttbr(mmu);
 	params->vtcr = mmu->vtcr;
