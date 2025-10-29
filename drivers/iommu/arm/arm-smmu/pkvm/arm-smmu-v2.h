@@ -97,6 +97,16 @@ struct sid_assignment {
 };
 
 /*
+ * Domain Private State
+ * Per-domain state for SMMUv2 IOMMU domains
+ */
+struct smmu_v2_domain {
+	struct hyp_arm_smmu_v2_device	*smmu;	/* SMMU instance */
+	u8				cb_idx;	/* Context bank index */
+	struct io_pgtable_ops		*pgtbl_ops; /* Page table operations */
+};
+
+/*
  * pKVM SMMUv2 Device
  * Represents one SMMU instance at EL2
  */
@@ -194,6 +204,24 @@ int smmu_v2_init_context_bank(struct hyp_arm_smmu_v2_device *smmu,
 /* Stream mapping */
 int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx);
 int smmu_v2_unmap_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid);
+
+/* Domain operations */
+int smmu_v2_alloc_domain(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *domain, int type);
+void smmu_v2_free_domain(struct kvm_hyp_iommu_domain *domain);
+
+/* Device lifecycle */
+int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *domain,
+		       pkvm_handle_t endpoint_id, u32 pasid, u32 pasid_bits, unsigned long flags);
+int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *domain,
+		       pkvm_handle_t endpoint_id, u32 pasid);
+
+/* Page table operations */
+int smmu_v2_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
+		      phys_addr_t paddr, size_t pgsize, size_t pgcount, int prot, size_t *total_mapped);
+size_t smmu_v2_unmap_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
+			   size_t pgsize, size_t pgcount, struct iommu_iotlb_gather *gather);
+phys_addr_t smmu_v2_iova_to_phys(struct kvm_hyp_iommu_domain *domain, unsigned long iova);
+void smmu_v2_iotlb_sync(struct kvm_hyp_iommu_domain *domain, struct iommu_iotlb_gather *gather);
 
 /* TLB operations */
 void smmu_v2_tlb_inv_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx);
