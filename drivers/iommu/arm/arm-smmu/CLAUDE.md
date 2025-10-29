@@ -288,11 +288,11 @@ static const struct mc_client_info tegra234_mc_clients[] = {
 
 ### Implementation Status
 
-#### Current Status: Phase 4 Complete - MMIO Emulation and Shadow State
+#### Current Status: Phase 5 Complete - Stream Mapping
 
 **Date Completed**: 2025-10-29
 
-Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2 translation), Phase 3 (TLB operations), and Phase 4 (MMIO emulation) are complete. The EL2 driver can now:
+Phases 1-5 are complete (hardware initialization, context bank management, TLB operations, MMIO emulation, and stream mapping). The EL2 driver can now:
 - Probe hardware capabilities and perform complete reset sequences
 - Initialize all data structures and create global identity-mapped page tables
 - Configure context banks with Stage-2-only translation for protected domains
@@ -301,6 +301,8 @@ Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2
 - Trap and emulate all SMMU register accesses from host (GR0, GR1, CB pages)
 - Enforce Stage-2 translation mode via CBAR for protected domains
 - Shadow SMR/S2CR state and protect TTBR0 from host modification
+- Map Stream IDs to context banks for device attachment
+- Unmap Stream IDs during device detachment
 
 #### Completed Work
 
@@ -313,8 +315,8 @@ Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2
   - `drivers/iommu/arm/arm-smmu/Makefile` - Added pkvm/ subdirectory and arm-smmu-kvm.o
   - `drivers/iommu/arm/arm-smmu/pkvm/Makefile` - Builds arm-smmu-v2.o and tegra234-mc.o
 
-**2. Core EL2 Driver - Phase 1 & 2 Complete** ✓
-- **File**: `drivers/iommu/arm/arm-smmu/pkvm/arm-smmu-v2.c` (1045 lines)
+**2. Core EL2 Driver - Phases 1-5 Complete** ✓
+- **File**: `drivers/iommu/arm/arm-smmu/pkvm/arm-smmu-v2.c` (1,901 lines)
 - **Contents**:
   - **Complete ARM SMMUv2 register definitions** (148 definitions)
     - GR0 registers: sCR0, IDR0-7, SMR, S2CR, GFAR, GFSR, TLB operations
@@ -378,7 +380,11 @@ Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2
   - Context bank management:
     - `smmu_v2_alloc_context_bank()` - Bitmap-based CB allocation (implemented)
     - `smmu_v2_free_context_bank()` - CB release (implemented)
-  - Stream mapping stubs (`smmu_v2_map_stream`, `smmu_v2_unmap_stream`)
+  - **Stream mapping (Phase 5 COMPLETE)**:
+    - `smmu_v2_find_free_sme()` - Allocate Stream Mapping Entry
+    - `smmu_v2_find_sme_by_sid()` - Lookup SME by Stream ID
+    - `smmu_v2_map_stream()` - Configure SMR+S2CR for device attachment
+    - `smmu_v2_unmap_stream()` - Clear stream mapping on detachment
   - **TLB operations (Phase 3 COMPLETE)**:
     - `smmu_v2_tlb_sync_global()` - Full implementation with timeout handling
     - `smmu_v2_tlb_sync_context()` - CB-specific sync with dual-base support
@@ -436,14 +442,14 @@ Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2
 The following areas contain stub functions marked with `TODO` comments:
 
 **Core EL2 Driver:**
-1. ✓ Hardware capability probing - Parse ID0-ID7 registers properly (COMPLETE)
-2. ✓ Hardware reset sequence - Clear faults, invalidate TLBs, configure sCR0 (COMPLETE)
-3. ✓ Shadow state initialization - Initialize SMR/S2CR shadow arrays (COMPLETE)
-4. ✓ Global page table creation - Create identity-mapped Stage-2 page table (COMPLETE)
-5. ✓ Context bank initialization - Program CBAR, TTBR, VTCR, SCTLR for Stage-2 (COMPLETE)
+1. ✓ Hardware capability probing - Parse ID0-ID7 registers properly (COMPLETE - Phase 1)
+2. ✓ Hardware reset sequence - Clear faults, invalidate TLBs, configure sCR0 (COMPLETE - Phase 1)
+3. ✓ Shadow state initialization - Initialize SMR/S2CR shadow arrays (COMPLETE - Phase 1)
+4. ✓ Global page table creation - Create identity-mapped Stage-2 page table (COMPLETE - Phase 2)
+5. ✓ Context bank initialization - Program CBAR, TTBR, VTCR, SCTLR for Stage-2 (COMPLETE - Phase 2)
 6. ✓ TLB operations - Global/context sync, range invalidation with timeout (COMPLETE - Phase 3)
 7. ✓ GR0/GR1/CB register emulation - Full MMIO trap-and-emulate implementation (COMPLETE - Phase 4)
-8. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
+8. ✓ Stream mapping implementation - Configure SMR/S2CR hardware registers (COMPLETE - Phase 5)
 
 **MC Integration:**
 1. ✗ MC MMIO region mapping - Map as shared memory with EL2
@@ -470,13 +476,13 @@ drivers/iommu/arm/arm-smmu/
 └── pkvm/
     ├── Makefile                 # Builds arm-smmu-v2.o and tegra234-mc.o
     ├── arm-smmu-v2.h            # All data structures (282 lines)
-    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1-4 complete (1,739 lines)
+    ├── arm-smmu-v2.c            # EL2 core driver with Phases 1-5 complete (1,901 lines)
     └── tegra234-mc.c            # MC integration skeleton (316 lines)
 
 drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 ```
 
-**Total Lines**: 2,731 lines (1,739 working implementation + 992 skeleton code)
+**Total Lines**: 2,893 lines (1,901 working implementation + 992 skeleton code)
 
 #### Phase 3 Completion Details (2025-10-29)
 
@@ -537,12 +543,49 @@ drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 **File Updates**:
 - `arm-smmu-v2.c`: +612 insertions, -6 deletions (now 1,739 lines, +52% growth)
 
+#### Phase 5 Completion Details (2025-10-29)
+
+**Commit**: `b351af2b555f` - "pkvm: smmu-v2: Implement Phase 5 - Stream Mapping"
+
+**Changes**:
+- `smmu_v2_find_free_sme()`: Find available Stream Mapping Entry (SME) by scanning hardware state
+- `smmu_v2_find_sme_by_sid()`: Lookup existing SME by Stream ID for conflict detection
+- `smmu_v2_map_stream()`: Complete device attachment implementation (98 lines)
+  * Validates SID and CB index ranges
+  * Detects and prevents double-mapping conflicts (same SID to different CB)
+  * Configures SMR with exact Stream ID match (mask=0, VALID=1)
+  * Configures S2CR with translation enabled (TYPE=TRANS, CBNDX=cb_idx)
+  * Updates both hardware and shadow state for MMIO emulation consistency
+  * Tegra234 dual-base support (writes to both primary/secondary registers)
+  * Idempotent operation (allows re-mapping same SID+CB pair)
+- `smmu_v2_unmap_stream()`: Device detachment implementation (54 lines)
+  * Clears SMR (invalidates entry)
+  * Sets S2CR to FAULT mode to catch stray transactions
+  * Updates hardware and shadow state
+  * No-op if SID already unmapped (idempotent)
+
+**Key Features**:
+- **Exact Stream ID matching**: SMR mask field = 0 (no wildcarding)
+- **FAULT mode on unmap**: Prevents stray DMA from accessing memory
+- **Conflict prevention**: Validates that SID is not already mapped to different CB
+- **Shadow state tracking**: Ensures MMIO emulation returns correct values
+- **Dual-base coordination**: Mirrors all writes to Tegra234 secondary register base
+
+**Hardware Registers Programmed**:
+```c
+SMR[n] = FIELD_PREP(ARM_SMMU_SMR_ID, sid) | ARM_SMMU_SMR_VALID
+S2CR[n] = FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_TRANS) |
+          FIELD_PREP(ARM_SMMU_S2CR_CBNDX, cb_idx)
+```
+
+**File Updates**:
+- `arm-smmu-v2.c`: +170 insertions, -8 deletions (now 1,901 lines, +9% growth)
+
 #### Next Steps
 
-Proceed with **Phase 5: Stream Mapping**:
-- **Phase 5**: Stream Mapping - Configure SMR/S2CR hardware registers during device attachment
-- **Phase 6**: MC Integration - SID validation and MMIO trapping
-- **Phase 7**: Device Lifecycle - Domain attach/detach, page table operations
+Proceed with **Phase 6: MC Integration**:
+- **Phase 6**: MC Integration - SID validation and MMIO trapping (1-2 weeks)
+- **Phase 7**: Device Lifecycle - Domain attach/detach, page table operations (1-2 weeks)
 
 See **Implementation Phases** section below for detailed breakdown.
 
