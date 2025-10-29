@@ -288,11 +288,16 @@ static const struct mc_client_info tegra234_mc_clients[] = {
 
 ### Implementation Status
 
-#### Current Status: Phase 2 Complete - Context Bank Management and Page Table Initialization
+#### Current Status: Phase 3 Complete - TLB Operations
 
 **Date Completed**: 2025-10-29
 
-Phase 1 (hardware initialization) and Phase 2 (context bank management with Stage-2 translation) are complete. The EL2 driver can now probe hardware capabilities, perform complete reset sequences, initialize all data structures, create global identity-mapped page tables, and configure context banks with Stage-2-only translation for protected domains.
+Phase 1 (hardware initialization), Phase 2 (context bank management with Stage-2 translation), and Phase 3 (TLB operations) are complete. The EL2 driver can now:
+- Probe hardware capabilities and perform complete reset sequences
+- Initialize all data structures and create global identity-mapped page tables
+- Configure context banks with Stage-2-only translation for protected domains
+- Perform TLB synchronization with timeout handling (global and context-specific)
+- Invalidate TLB entries efficiently (full context or optimized IOVA range)
 
 #### Completed Work
 
@@ -356,11 +361,11 @@ Phase 1 (hardware initialization) and Phase 2 (context bank management with Stag
     - `smmu_v2_alloc_context_bank()` - Bitmap-based CB allocation (implemented)
     - `smmu_v2_free_context_bank()` - CB release (implemented)
   - Stream mapping stubs (`smmu_v2_map_stream`, `smmu_v2_unmap_stream`)
-  - TLB operation stubs:
-    - `smmu_v2_tlb_sync_global()` - Basic polling implementation
-    - `smmu_v2_tlb_sync_context()` - Stub
-    - `smmu_v2_tlb_inv_context()` - Stub using TLBIVMID
-    - `smmu_v2_tlb_inv_range()` - Stub (currently calls full context invalidation)
+  - **TLB operations (Phase 3 COMPLETE)**:
+    - `smmu_v2_tlb_sync_global()` - Full implementation with timeout handling
+    - `smmu_v2_tlb_sync_context()` - CB-specific sync with dual-base support
+    - `smmu_v2_tlb_inv_context()` - TLBIVMID invalidation with error handling
+    - `smmu_v2_tlb_inv_range()` - Optimized range invalidation (S2_TLBIIPAS2, 32-page threshold)
   - SID management:
     - `smmu_v2_assign_sid()` - Track SID assignments (implemented)
     - `smmu_v2_release_sid()` - Release SID assignments (implemented)
@@ -418,9 +423,9 @@ The following areas contain stub functions marked with `TODO` comments:
 3. ✓ Shadow state initialization - Initialize SMR/S2CR shadow arrays (COMPLETE)
 4. ✓ Global page table creation - Create identity-mapped Stage-2 page table (COMPLETE)
 5. ✓ Context bank initialization - Program CBAR, TTBR, VTCR, SCTLR for Stage-2 (COMPLETE)
-6. ✗ GR0/GR1/CB register emulation - Implement actual register handling logic
-7. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
-8. ✗ TLB operation implementation - Proper IOVA range invalidation
+6. ✓ TLB operations - Global/context sync, range invalidation with timeout (COMPLETE - Phase 3)
+7. ✗ GR0/GR1/CB register emulation - Implement actual register handling logic
+8. ✗ Stream mapping implementation - Configure SMR/S2CR hardware registers
 
 **MC Integration:**
 1. ✗ MC MMIO region mapping - Map as shared memory with EL2
@@ -447,28 +452,40 @@ drivers/iommu/arm/arm-smmu/
 └── pkvm/
     ├── Makefile                 # Builds arm-smmu-v2.o and tegra234-mc.o
     ├── arm-smmu-v2.h            # All data structures (282 lines)
-    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1 & 2 complete (1045 lines)
+    ├── arm-smmu-v2.c            # EL2 core driver with Phase 1-3 complete (1,146 lines)
     └── tegra234-mc.c            # MC integration skeleton (316 lines)
 
 drivers/iommu/arm/Kconfig        # Added ARM_SMMU_V2_PKVM option
 ```
 
-**Total Lines**: 2,050 lines (1,045 working implementation + 1,005 skeleton code)
+**Total Lines**: 2,138 lines (1,146 working implementation + 992 skeleton code)
+
+#### Phase 3 Completion Details (2025-10-29)
+
+**Commit**: `e25bac0c4ae2` - "pkvm: smmu-v2: Implement Phase 3 - TLB Operations"
+
+**Changes**:
+- `smmu_v2_tlb_sync_global()`: Added timeout handling (1s) with `ARM_SMMU_sTLBGSTATUS_GSACTIVE` polling
+- `smmu_v2_tlb_sync_context()`: Implemented CB-specific sync with `ARM_SMMU_CB_TLBSTATUS` polling, dual-base support
+- `smmu_v2_tlb_inv_context()`: Added error handling for sync failures with detailed logging
+- `smmu_v2_tlb_inv_range()`: Implemented optimized range invalidation:
+  * Smart threshold: ≤32 pages → per-page, >32 pages → full context
+  * Uses `ARM_SMMU_CB_S2_TLBIIPAS2` for Stage-2 IPA invalidation
+  * Address shifted right by 12 bits for 4K page boundaries
+  * Full Tegra234 dual-base support
+
+**Key Features**:
+- Timeout detection with `TLB_LOOP_TIMEOUT` (1,000,000 iterations ≈ 1 second)
+- Error logging with SMMU ID, CB index, VMID for debugging
+- Tegra234 dual register base coordination (niso0/niso1)
+- Returns `-ETIMEDOUT` on hardware failures
+
+**File Updates**:
+- `arm-smmu-v2.c`: +101 insertions, -13 deletions (now 1,146 lines)
 
 #### Next Steps
 
-Proceed with **Phase 3: TLB Operations**:
-
-1. Implement proper IOVA range invalidation in `smmu_v2_tlb_inv_range()`
-   - Calculate number of pages in range
-   - Use TLBIVA (address-based invalidation) for small ranges
-   - Fall back to TLBIVMID (full context invalidation) for large ranges
-2. Implement context-specific TLB sync in `smmu_v2_tlb_sync_context()`
-   - Poll CB_TLBSTATUS register for completion
-   - Add timeout handling (~1 second)
-3. Add error handling and recovery for TLB sync timeouts
-
-After Phase 3, continue with:
+Proceed with **Phase 4: MMIO Emulation and Shadow State**:
 - **Phase 4**: MMIO Emulation and Shadow State - Implement GR0/GR1/CB register handlers
 - **Phase 5**: Stream Mapping - Configure SMR/S2CR hardware registers
 - **Phase 6**: MC Integration - SID validation and MMIO trapping
