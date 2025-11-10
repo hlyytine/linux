@@ -29,6 +29,41 @@
 
 #include <linux/kvm_host.h>
 #include <asm/kvm_mmu.h>
+#include <asm/kvm_pkvm.h>
+
+/* Forward declarations for EL2 structures */
+#define ARM_SMMU_MAX_INSTANCES		3
+#define ARM_SMMU_FEAT_COHERENT_WALK	BIT(3)
+
+struct hyp_arm_smmu_v2_device {
+	phys_addr_t mmio_addr;
+	phys_addr_t mmio_size;
+	phys_addr_t mmio_addr_sec;
+	bool has_secondary_base;
+	u32 features;
+	/* Rest of structure not needed by EL1 */
+};
+
+/* External EL2 symbols */
+extern struct kvm_iommu_ops kvm_nvhe_sym(smmu_v2_ops);
+extern struct hyp_arm_smmu_v2_device *kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus)[ARM_SMMU_MAX_INSTANCES];
+#define kvm_hyp_arm_smmu_v2_smmus kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus)
+
+#ifdef MODULE
+static unsigned long pkvm_module_token;
+
+#define ksym_ref_addr_nvhe(x) \
+	((typeof(kvm_nvhe_sym(x)) *)(pkvm_el2_mod_va(&kvm_nvhe_sym(x), pkvm_module_token)))
+
+int kvm_nvhe_sym(smmu_v2_init_hyp_module)(const struct pkvm_module_ops *ops);
+#else
+#define ksym_ref_addr_nvhe(x) \
+	((typeof(kvm_nvhe_sym(x)) *)(kern_hyp_va(lm_alias(&kvm_nvhe_sym(x)))))
+#endif
+
+/* Global SMMU array for EL2 */
+static size_t kvm_arm_smmu_v2_count;
+static struct hyp_arm_smmu_v2_device *kvm_arm_smmu_v2_array;
 
 /* Forward declarations */
 struct arm_smmu_kvm_device;
@@ -468,6 +503,232 @@ static struct platform_driver arm_smmu_kvm_driver = {
 	.probe	= arm_smmu_kvm_device_probe,
 	.remove	= arm_smmu_kvm_device_remove,
 };
+
+/*
+ * pKVM IOMMU Driver Registration
+ *
+ * This must run early (subsys_initcall) to register with the pKVM framework
+ * before KVM initialization.
+ */
+
+static void kvm_arm_smmu_v2_array_free(void)
+{
+	int order;
+
+	if (!kvm_arm_smmu_v2_array)
+		return;
+
+	order = get_order(kvm_arm_smmu_v2_count * sizeof(*kvm_arm_smmu_v2_array));
+	free_pages((unsigned long)kvm_arm_smmu_v2_array, order);
+	kvm_arm_smmu_v2_array = NULL;
+}
+
+/**
+ * kvm_arm_smmu_v2_array_alloc - Allocate SMMU device array for EL2
+ *
+ * Parses device tree to find all SMMUv2 instances, allocates shadow
+ * array structures, and populates basic MMIO information for EL2.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int kvm_arm_smmu_v2_array_alloc(void)
+{
+	struct device_node *np;
+	int smmu_order;
+	int ret;
+	int i = 0;
+
+	/* Count SMMU instances in device tree */
+	kvm_arm_smmu_v2_count = 0;
+	for_each_compatible_node(np, NULL, "arm,mmu-500")
+		kvm_arm_smmu_v2_count++;
+	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu")
+		kvm_arm_smmu_v2_count++;
+
+	if (!kvm_arm_smmu_v2_count)
+		return -ENODEV;
+
+	/* Allocate array */
+	smmu_order = get_order(kvm_arm_smmu_v2_count * sizeof(*kvm_arm_smmu_v2_array));
+	kvm_arm_smmu_v2_array = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, smmu_order);
+	if (!kvm_arm_smmu_v2_array)
+		return -ENOMEM;
+
+	/* Parse device tree and populate MMIO addresses */
+	for_each_compatible_node(np, NULL, "arm,mmu-500") {
+		struct resource res;
+
+		ret = of_address_to_resource(np, 0, &res);
+		if (ret)
+			goto out_err;
+
+		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
+		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
+
+		/* Check for secondary register base (Tegra234 niso0/niso1) */
+		if (!of_address_to_resource(np, 1, &res)) {
+			kvm_arm_smmu_v2_array[i].mmio_addr_sec = res.start;
+			kvm_arm_smmu_v2_array[i].has_secondary_base = true;
+		}
+
+		if (of_dma_is_coherent(np))
+			kvm_arm_smmu_v2_array[i].features |= ARM_SMMU_FEAT_COHERENT_WALK;
+
+		i++;
+	}
+
+	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu") {
+		struct resource res;
+
+		ret = of_address_to_resource(np, 0, &res);
+		if (ret)
+			goto out_err;
+
+		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
+		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
+
+		/* Check for secondary register base */
+		if (!of_address_to_resource(np, 1, &res)) {
+			kvm_arm_smmu_v2_array[i].mmio_addr_sec = res.start;
+			kvm_arm_smmu_v2_array[i].has_secondary_base = true;
+		}
+
+		if (of_dma_is_coherent(np))
+			kvm_arm_smmu_v2_array[i].features |= ARM_SMMU_FEAT_COHERENT_WALK;
+
+		i++;
+	}
+
+	return 0;
+
+out_err:
+	kvm_arm_smmu_v2_array_free();
+	return ret;
+}
+
+/**
+ * smmu_v2_hyp_pgt_pages - Calculate EL2 memory pool size
+ *
+ * Returns: Number of pages needed for EL2 page table pool
+ */
+static size_t smmu_v2_hyp_pgt_pages(void)
+{
+	/*
+	 * Request a fixed reasonable amount for IOMMU page tables.
+	 * For Tegra234 with 3 SMMU instances and typical GPU virtualization:
+	 * - Global identity page table: ~2000 pages (8 MB)
+	 * - Per-domain page tables: ~2000 pages (8 MB)
+	 * - Shadow structures (SMR/S2CR/CB state): ~100 pages (400 KB)
+	 * - TLB management overhead: ~100 pages (400 KB)
+	 * - Growth headroom: ~4000 pages (16 MB)
+	 * Total: 8192 pages (~32 MB)
+	 *
+	 * This is much smaller than host_s2_pgtable_pages() which includes
+	 * the entire system memory, but we only need IOMMU-mapped regions.
+	 */
+	if (of_find_compatible_node(NULL, NULL, "arm,mmu-500") ||
+	    of_find_compatible_node(NULL, NULL, "nvidia,tegra234-smmu")) {
+#ifdef MODULE
+		return 1; /* Rely on kernel command line for modules */
+#else
+		return 8192; /* Fixed 32 MB allocation */
+#endif
+	}
+	return 0;
+}
+
+/**
+ * kvm_arm_smmu_v2_init - Initialize EL2 hypervisor driver
+ *
+ * Called by pKVM framework during KVM initialization. Triggers EL2
+ * hypervisor driver initialization via hypercall.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int kvm_arm_smmu_v2_init(void)
+{
+	int ret;
+
+#ifdef MODULE
+	ret = pkvm_load_el2_module(kvm_nvhe_sym(smmu_v2_init_hyp_module),
+				   &pkvm_module_token);
+	if (ret) {
+		pr_err("Failed to load SMMUv2 IOMMU EL2 module: %d\n", ret);
+		return ret;
+	}
+#endif
+
+	/* Initialize EL2 hypervisor driver */
+	ret = kvm_iommu_init_hyp(ksym_ref_addr_nvhe(smmu_v2_ops));
+	if (ret) {
+		pr_err("Failed to initialize SMMUv2 IOMMU at EL2: %d\n", ret);
+		return ret;
+	}
+
+	pr_info("ARM SMMUv2 pKVM driver initialized at EL2\n");
+	return 0;
+}
+
+/* pKVM driver operations structure */
+struct kvm_iommu_driver kvm_smmu_v2_ops = {
+	.init_driver = kvm_arm_smmu_v2_init,
+};
+
+/**
+ * kvm_arm_smmu_v2_register - Register SMMUv2 driver with pKVM framework
+ *
+ * This function runs early (subsys_initcall) to register the SMMUv2
+ * driver with the pKVM IOMMU framework before KVM initialization.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int __init kvm_arm_smmu_v2_register(void)
+{
+	size_t nr_pages;
+	int ret;
+
+	if (!is_protected_kvm_enabled())
+		return 0;
+
+	/* Calculate memory pool size for EL2 */
+	nr_pages = smmu_v2_hyp_pgt_pages();
+	if (!nr_pages)
+		return 0; /* No SMMU hardware found */
+
+	/* Allocate and populate SMMU array for EL2 */
+	ret = kvm_arm_smmu_v2_array_alloc();
+	if (ret) {
+		pr_err("Failed to allocate SMMUv2 array: %d\n", ret);
+		return ret;
+	}
+
+	/* Register with pKVM framework */
+	ret = kvm_iommu_register_driver(&kvm_smmu_v2_ops, nr_pages);
+	if (ret) {
+		pr_err("Failed to register SMMUv2 driver with pKVM: %d\n", ret);
+		goto out_err;
+	}
+
+	/*
+	 * Store array pointers in nVHE symbols for EL2 access.
+	 * These variables are in the nVHE image and won't be accessible
+	 * after KVM initialization. Ownership transfers to EL2.
+	 */
+	for (int i = 0; i < kvm_arm_smmu_v2_count; i++)
+		kvm_hyp_arm_smmu_v2_smmus[i] = &kvm_arm_smmu_v2_array[i];
+
+	pr_info("ARM SMMUv2 pKVM driver registered (%zu instances, %zu pages)\n",
+		kvm_arm_smmu_v2_count, nr_pages);
+
+	return 0;
+
+out_err:
+	kvm_arm_smmu_v2_array_free();
+	return ret;
+}
+
+/* Register early, before KVM initialization */
+subsys_initcall(kvm_arm_smmu_v2_register);
 
 static int __init arm_smmu_kvm_init(void)
 {
