@@ -1225,11 +1225,10 @@ static size_t smmu_pgsize_idmap(size_t size, u64 paddr, size_t pgsize_bitmap)
 	return BIT(__fls(pgsizes));
 }
 
-/* See pkvm/arm-smmu-v3.c */
 static void smmu_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int prot)
 {
 	size_t size = end - start;
-	size_t pgsize = PAGE_SIZE, pgcount;
+	size_t pgsize, pgcount;
 	size_t mapped, unmapped;
 	int ret;
 	struct io_pgtable *pgtable = idmap_pgtable;
@@ -1241,9 +1240,7 @@ static void smmu_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int prot)
 	if (prot) {
 		while (size) {
 			mapped = 0;
-			if (prot & IOMMU_MMIO)
-				pgsize = smmu_pgsize_idmap(size, start, pgtable->cfg.pgsize_bitmap);
-
+			pgsize = smmu_pgsize_idmap(size, start, pgtable->cfg.pgsize_bitmap);
 			pgcount = size / pgsize;
 			ret = pgtable->ops.map_pages(&pgtable->ops, start, start,
 						     pgsize, pgcount, prot, 0, &mapped);
@@ -1256,6 +1253,7 @@ static void smmu_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int prot)
 		/* Shouldn't happen. */
 		WARN_ON(prot & IOMMU_MMIO);
 		while (size) {
+			pgsize = smmu_pgsize_idmap(size, start, pgtable->cfg.pgsize_bitmap);
 			pgcount = size / pgsize;
 			unmapped = pgtable->ops.unmap_pages(&pgtable->ops, start,
 							    pgsize, pgcount, NULL);
