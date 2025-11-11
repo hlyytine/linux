@@ -9,10 +9,16 @@
 
 #include <nvhe/alloc_mgt.h>
 
+struct kvm_iommu_ops;
 struct kvm_hyp_iommu_domain {
 	atomic_t		refs;
 	pkvm_handle_t		domain_id;
 	void			*priv;
+	struct kvm_iommu_ops	*driver;
+};
+
+struct kvm_iommu_private {
+	bool initialised;
 };
 
 struct kvm_iommu_ops {
@@ -36,6 +42,8 @@ struct kvm_iommu_ops {
 	void (*iotlb_sync)(struct kvm_hyp_iommu_domain *domain,
 			   struct iommu_iotlb_gather *gather);
 	int (*set_identity)(pkvm_handle_t iommu, pkvm_handle_t dev, bool state);
+	/* Core private data. */
+	struct kvm_iommu_private priv;
 };
 
 int kvm_iommu_init(void *pool_base, size_t nr_pages);
