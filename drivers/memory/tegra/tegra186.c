@@ -13,6 +13,10 @@
 
 #include <soc/tegra/mc.h>
 
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+#include <linux/arm-smmu.h>
+#endif
+
 #if defined(CONFIG_ARCH_TEGRA_186_SOC)
 #include <dt-bindings/memory/tegra186-mc.h>
 #endif
@@ -22,6 +26,90 @@
 #define MC_SID_STREAMID_OVERRIDE_MASK GENMASK(7, 0)
 #define MC_SID_STREAMID_SECURITY_WRITE_ACCESS_DISABLED BIT(16)
 #define MC_SID_STREAMID_SECURITY_OVERRIDE BIT(8)
+
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+/**
+ * tegra186_mc_enumerate_sids() - Enumerate all Stream ID assignments from device tree
+ * @mc: Memory controller instance
+ *
+ * Walks the device tree to find all devices with both 'iommus' and 'interconnects'
+ * properties. For each device:
+ * 1. Extract Stream ID from iommus property
+ * 2. Extract MC client ID(s) from interconnects property
+ * 3. Register the SID→client mapping with EL2 hypervisor
+ *
+ * This ensures EL2 knows the complete SID assignment table before any devices
+ * attempt IOMMU attachment, eliminating race conditions with device probing.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
+{
+	struct device_node *np;
+	struct of_phandle_args iommu_args, ic_args;
+	const struct tegra_mc_client *client;
+	u32 sid;
+	int err, i;
+
+	dev_info(mc->dev, "MC: Enumerating Stream ID assignments for pKVM\n");
+
+	/* Walk all device tree nodes with "iommus" property */
+	for_each_node_with_property(np, "iommus") {
+		/* Skip if no interconnects property (not an MC client) */
+		if (!of_find_property(np, "interconnects", NULL))
+			continue;
+
+		/* Extract Stream ID from iommus property */
+		err = of_parse_phandle_with_args(np, "iommus", "#iommu-cells",
+						  0, &iommu_args);
+		if (err) {
+			dev_warn(mc->dev, "MC: Failed to parse iommus for %pOF: %d\n",
+				 np, err);
+			continue;
+		}
+
+		/* Stream ID is first argument */
+		sid = iommu_args.args[0];
+		of_node_put(iommu_args.np);
+
+		/* Parse interconnects property to find MC client IDs */
+		i = 0;
+		while (!of_parse_phandle_with_args(np, "interconnects",
+						     "#interconnect-cells",
+						     i * 2, &ic_args)) {
+			u32 client_id = ic_args.args[0];
+			of_node_put(ic_args.np);
+
+			/* Find client in MC's client table */
+			for (client = mc->soc->clients;
+			     client < mc->soc->clients + mc->soc->num_clients;
+			     client++) {
+				if (client->id == client_id) {
+					dev_info(mc->dev,
+						 "MC: Device %pOF: client %s (0x%x) → SID 0x%x\n",
+						 np, client->name, client_id, sid);
+
+					/* Register with EL2 hypervisor */
+					err = kvm_call_hyp_nvhe(__pkvm_mc_register_sid,
+								client_id, sid);
+					if (err) {
+						dev_err(mc->dev,
+							"MC: Failed to register SID mapping: %d\n",
+							err);
+						return err;
+					}
+					break;
+				}
+			}
+
+			i++;
+		}
+	}
+
+	dev_info(mc->dev, "MC: Stream ID enumeration complete\n");
+	return 0;
+}
+#endif /* CONFIG_ARM_SMMU_V2_PKVM */
 
 static int tegra186_mc_probe(struct tegra_mc *mc)
 {
@@ -72,6 +160,15 @@ populate:
 	err = of_platform_populate(mc->dev->of_node, NULL, NULL, mc->dev);
 	if (err < 0)
 		return err;
+
+#if defined(CONFIG_ARM_SMMU_V2_PKVM)
+	/* Enumerate all SID assignments before devices probe */
+	err = tegra186_mc_enumerate_sids(mc);
+	if (err) {
+		dev_err(&pdev->dev, "failed to enumerate SIDs: %d\n", err);
+		return err;
+	}
+#endif
 
 	return 0;
 }
