@@ -237,6 +237,7 @@ struct sid_assignment *smmu_v2_lookup_sid(u32 sid);
 /* MC integration */
 int mc_init(phys_addr_t mmio_addr, size_t mmio_size);
 bool mc_mmio_handler(u64 addr, bool is_write, u64 *val);
+int mc_register_sid_mapping(u32 client_id, u32 sid);
 int mc_validate_sid_for_client(u32 client_id, u32 sid);
 const struct mc_client_info *mc_offset_to_client(u32 offset);
 

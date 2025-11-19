@@ -387,6 +387,55 @@ bool mc_mmio_handler(u64 addr, bool is_write, u64 *val)
 }
 
 /*
+ * SID Registration
+ */
+
+/**
+ * mc_register_sid_mapping - Register a SID→client mapping during early boot
+ * @client_id: MC client ID (TEGRA234_MEMORY_CLIENT_*)
+ * @sid: Stream ID extracted from device tree
+ *
+ * Called by MC driver during device tree enumeration (arch_initcall level)
+ * to register all SID assignments BEFORE devices probe.
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+int mc_register_sid_mapping(u32 client_id, u32 sid)
+{
+	struct sid_assignment *entry;
+
+	/* Validate SID range */
+	if (sid >= ARM_SMMU_MAX_SIDS) {
+		HYP_ERR("MC: Invalid SID %u (max %u)", sid, ARM_SMMU_MAX_SIDS);
+		return -EINVAL;
+	}
+
+	entry = &sid_map[sid];
+
+	/*
+	 * Check if already assigned to a different client.
+	 * Allow re-registration of the same client_id→sid mapping
+	 * (idempotent operation for resume path).
+	 */
+	if (entry->active && entry->client_id != client_id) {
+		HYP_ERR("MC: SID %u conflict: already assigned to client 0x%x",
+			sid, entry->client_id);
+		return -EBUSY;
+	}
+
+	/*
+	 * Record the mapping. Note that domain_id, cb_idx, and smmu_id
+	 * are populated later during device attachment (smmu_v2_attach_dev).
+	 */
+	entry->sid = sid;
+	entry->client_id = client_id;
+	entry->active = true;
+
+	HYP_INFO("MC: Registered client 0x%x → SID %u", client_id, sid);
+	return 0;
+}
+
+/*
  * Helper Functions
  */
 
