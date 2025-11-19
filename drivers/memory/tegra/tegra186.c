@@ -14,7 +14,8 @@
 #include <soc/tegra/mc.h>
 
 #if defined(CONFIG_ARM_SMMU_V2_PKVM)
-#include <linux/arm-smmu.h>
+#include <linux/arm-smccc.h>
+#include <asm/kvm_asm.h>
 #endif
 
 #if defined(CONFIG_ARCH_TEGRA_186_SOC)
@@ -85,13 +86,16 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 			     client < mc->soc->clients + mc->soc->num_clients;
 			     client++) {
 				if (client->id == client_id) {
+					struct arm_smccc_res res;
+
 					dev_info(mc->dev,
 						 "MC: Device %pOF: client %s (0x%x) → SID 0x%x\n",
 						 np, client->name, client_id, sid);
 
-					/* Register with EL2 hypervisor */
-					err = kvm_call_hyp_nvhe(__pkvm_mc_register_sid,
-								client_id, sid);
+					/* Register with EL2 hypervisor via SMCCC */
+					arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_mc_register_sid),
+							  client_id, sid, 0, 0, 0, 0, 0, &res);
+					err = (int)res.a0;
 					if (err) {
 						dev_err(mc->dev,
 							"MC: Failed to register SID mapping: %d\n",
