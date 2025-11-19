@@ -8,11 +8,18 @@
 #ifndef __ARM_SMMU_V2_HYP_H
 #define __ARM_SMMU_V2_HYP_H
 
+#ifdef __KVM_NVHE_HYPERVISOR__
+/* EL2 hypervisor includes */
 #include <asm/kvm_hyp.h>
 #include <asm/kvm_mmu.h>
 #include <nvhe/iommu.h>
 #include <nvhe/memory.h>
 #include <nvhe/spinlock.h>
+#else
+/* EL1 host includes */
+#include <linux/types.h>
+#include <asm/kvm_pkvm.h>
+#endif
 
 /* Maximum number of SMMU instances on Tegra234 */
 #define ARM_SMMU_MAX_INSTANCES		3
@@ -170,11 +177,23 @@ struct hyp_tegra_mc {
 };
 
 /*
- * Global State
+ * Global State - nVHE symbols for EL2/EL1 communication
  */
-extern struct hyp_arm_smmu_v2_device *kvm_hyp_arm_smmu_v2_smmus[ARM_SMMU_MAX_INSTANCES];
+
+/* SMMU device array (populated by EL1, accessed by EL2) */
+extern struct hyp_arm_smmu_v2_device *kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus);
+#define kvm_hyp_arm_smmu_v2_smmus kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus)
+
+extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count);
+#define kvm_hyp_arm_smmu_v2_count kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count)
+
+/* EL2-only state */
 extern struct sid_assignment sid_map[ARM_SMMU_MAX_SIDS];
 extern struct hyp_tegra_mc tegra234_mc;
+
+/* Forward declaration of EL2 ops structure for EL1 registration */
+struct kvm_iommu_ops;
+extern struct kvm_iommu_ops smmu_v2_ops;
 
 /*
  * Core Functions
@@ -284,10 +303,8 @@ const struct mc_client_info *mc_offset_to_client(u32 offset);
 static inline struct hyp_arm_smmu_v2_device *smmu_v2_find_by_mmio_addr(u64 addr)
 {
 	int i;
-	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
-		struct hyp_arm_smmu_v2_device *smmu = kvm_hyp_arm_smmu_v2_smmus[i];
-		if (!smmu)
-			continue;
+	for (i = 0; i < kvm_hyp_arm_smmu_v2_count; i++) {
+		struct hyp_arm_smmu_v2_device *smmu = &kvm_hyp_arm_smmu_v2_smmus[i];
 
 		/* Check primary base */
 		if (addr >= smmu->mmio_addr && addr < smmu->mmio_addr + smmu->mmio_size)

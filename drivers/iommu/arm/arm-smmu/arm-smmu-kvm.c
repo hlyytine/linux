@@ -30,24 +30,74 @@
 #include <linux/kvm_host.h>
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_pkvm.h>
+#include <asm/kvm_hyp.h>
 
-/* Forward declarations for EL2 structures */
-#define ARM_SMMU_MAX_INSTANCES		3
+/*
+ * Minimal structures for EL1 driver
+ * (Full EL2 structures in pkvm/arm-smmu-v2.h use EL2-only types)
+ */
+
+/* Feature flags */
 #define ARM_SMMU_FEAT_COHERENT_WALK	BIT(3)
 
+/*
+ * Forward declarations - actual definitions in pkvm/arm-smmu-v2.h
+ * We don't include that header because it uses EL2-only types.
+ */
+struct arm_smmu_smr;
+struct arm_smmu_s2cr;
+struct smmu_v2_cb_state;
+
+/*
+ * SMMU device structure for EL1/EL2 communication.
+ * CRITICAL: Layout must match struct hyp_arm_smmu_v2_device in pkvm/arm-smmu-v2.h exactly.
+ *
+ * To verify: sizeof(struct hyp_arm_smmu_v2_device) must be the same in both EL1 and EL2.
+ */
 struct hyp_arm_smmu_v2_device {
-	phys_addr_t mmio_addr;
-	phys_addr_t mmio_size;
-	phys_addr_t mmio_addr_sec;
-	bool has_secondary_base;
-	u32 features;
-	/* Rest of structure not needed by EL1 */
+	/* Hardware configuration (first 60 bytes) */
+	u32			id;
+	phys_addr_t		mmio_addr;
+	void __iomem		*base;
+	phys_addr_t		mmio_addr_sec;
+	void __iomem		*base_sec;
+	bool			has_secondary_base;
+	size_t			mmio_size;
+
+	/* SMMU capabilities (next 28 bytes) */
+	u32			features;
+	u32			num_mapping_groups;
+	u32			num_context_banks;
+	u32			num_s2_context_banks;
+	u8			pgshift;
+	unsigned long		pgsize_bitmap;
+	u8			ias;
+	u8			oas;
+	u16			vmid_bits;
+
+	/* Context bank bitmap (16 bytes for 128 bits) */
+	unsigned long		context_map[2];
+
+	/* Context bank state array (128 * 56 bytes = 7168 bytes) */
+	u8			_cb_state_reserved[7168];
+
+	/* Shadow arrays (32 bytes - 4 pointers) */
+	struct arm_smmu_smr	*smrs_shadow;
+	struct arm_smmu_s2cr	*s2crs_shadow;
+	struct arm_smmu_smr	*smrs_hw;
+	struct arm_smmu_s2cr	*s2crs_hw;
+
+	/* Lock and MC pointer - EL2 uses these, EL1 doesn't access but must reserve space */
+	u32			_lock_reserved;   /* hyp_spinlock_t is u32 */
+	void			*_mc_reserved;    /* struct hyp_tegra_mc * */
 };
 
 /* External EL2 symbols */
 extern struct kvm_iommu_ops kvm_nvhe_sym(smmu_v2_ops);
-extern struct hyp_arm_smmu_v2_device *kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus)[ARM_SMMU_MAX_INSTANCES];
+extern struct hyp_arm_smmu_v2_device *kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus);
 #define kvm_hyp_arm_smmu_v2_smmus kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus)
+extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count);
+#define kvm_hyp_arm_smmu_v2_count kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count)
 
 #ifdef MODULE
 static unsigned long pkvm_module_token;
@@ -538,12 +588,16 @@ static int kvm_arm_smmu_v2_array_alloc(void)
 	int ret;
 	int i = 0;
 
+	pr_info("SMMUv2: kvm_arm_smmu_v2_array_alloc() called\n");
+
 	/* Count SMMU instances in device tree */
 	kvm_arm_smmu_v2_count = 0;
 	for_each_compatible_node(np, NULL, "arm,mmu-500")
 		kvm_arm_smmu_v2_count++;
 	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu")
 		kvm_arm_smmu_v2_count++;
+
+	pr_info("SMMUv2: Found %zu SMMU instances in device tree\n", kvm_arm_smmu_v2_count);
 
 	if (!kvm_arm_smmu_v2_count)
 		return -ENODEV;
@@ -558,12 +612,21 @@ static int kvm_arm_smmu_v2_array_alloc(void)
 	for_each_compatible_node(np, NULL, "arm,mmu-500") {
 		struct resource res;
 
-		ret = of_address_to_resource(np, 0, &res);
-		if (ret)
-			goto out_err;
+		pr_info("SMMUv2: Parsing arm,mmu-500 node %s (index %d)\n", np->full_name, i);
 
+		ret = of_address_to_resource(np, 0, &res);
+		if (ret) {
+			pr_err("SMMUv2: of_address_to_resource failed for %s: %d\n", np->full_name, ret);
+			goto out_err;
+		}
+
+		kvm_arm_smmu_v2_array[i].id = i;  /* SMMU instance ID */
 		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
 		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
+
+		pr_info("SMMUv2: SMMU[%d] at PA %llx, size %llx\n", i,
+			(u64)kvm_arm_smmu_v2_array[i].mmio_addr,
+			(u64)kvm_arm_smmu_v2_array[i].mmio_size);
 
 		/* Check for secondary register base (Tegra234 niso0/niso1) */
 		if (!of_address_to_resource(np, 1, &res)) {
@@ -580,12 +643,21 @@ static int kvm_arm_smmu_v2_array_alloc(void)
 	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu") {
 		struct resource res;
 
-		ret = of_address_to_resource(np, 0, &res);
-		if (ret)
-			goto out_err;
+		pr_info("SMMUv2: Parsing nvidia,tegra234-smmu node %s (index %d)\n", np->full_name, i);
 
+		ret = of_address_to_resource(np, 0, &res);
+		if (ret) {
+			pr_err("SMMUv2: of_address_to_resource failed for %s: %d\n", np->full_name, ret);
+			goto out_err;
+		}
+
+		kvm_arm_smmu_v2_array[i].id = i;  /* SMMU instance ID */
 		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
 		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
+
+		pr_info("SMMUv2: SMMU[%d] at PA %llx, size %llx\n", i,
+			(u64)kvm_arm_smmu_v2_array[i].mmio_addr,
+			(u64)kvm_arm_smmu_v2_array[i].mmio_size);
 
 		/* Check for secondary register base */
 		if (!of_address_to_resource(np, 1, &res)) {
@@ -599,9 +671,26 @@ static int kvm_arm_smmu_v2_array_alloc(void)
 		i++;
 	}
 
+	/*
+	 * Shadow arrays will be allocated by EL2 during smmu_v2_init().
+	 * We don't allocate them here to avoid the complexity of memory donation.
+	 */
+	for (i = 0; i < kvm_arm_smmu_v2_count; i++) {
+		kvm_arm_smmu_v2_array[i].smrs_shadow = NULL;
+		kvm_arm_smmu_v2_array[i].s2crs_shadow = NULL;
+		kvm_arm_smmu_v2_array[i].smrs_hw = NULL;
+		kvm_arm_smmu_v2_array[i].s2crs_hw = NULL;
+
+		pr_info("SMMUv2: SMMU[%d] initialized (shadow arrays will be allocated by EL2)\n", i);
+	}
+
+	pr_info("SMMUv2: Successfully allocated array for %zu SMMU instances\n", kvm_arm_smmu_v2_count);
+	pr_info("SMMUv2: Array physical address: %llx\n", (u64)virt_to_phys(kvm_arm_smmu_v2_array));
+
 	return 0;
 
 out_err:
+	pr_err("SMMUv2: Array allocation failed with error %d\n", ret);
 	kvm_arm_smmu_v2_array_free();
 	return ret;
 }
@@ -687,15 +776,25 @@ static int __init kvm_arm_smmu_v2_register(void)
 	size_t nr_pages;
 	int ret;
 
-	if (!is_protected_kvm_enabled())
+	pr_info("SMMUv2: kvm_arm_smmu_v2_register() called\n");
+
+	if (!is_protected_kvm_enabled()) {
+		pr_info("SMMUv2: pKVM not enabled, skipping registration\n");
 		return 0;
+	}
+
+	pr_info("SMMUv2: pKVM is enabled, proceeding with registration\n");
 
 	/* Calculate memory pool size for EL2 */
 	nr_pages = smmu_v2_hyp_pgt_pages();
-	if (!nr_pages)
+	pr_info("SMMUv2: Calculated %zu pages needed for EL2 page tables\n", nr_pages);
+	if (!nr_pages) {
+		pr_info("SMMUv2: No SMMU hardware found in device tree\n");
 		return 0; /* No SMMU hardware found */
+	}
 
 	/* Allocate and populate SMMU array for EL2 */
+	pr_info("SMMUv2: Calling kvm_arm_smmu_v2_array_alloc()...\n");
 	ret = kvm_arm_smmu_v2_array_alloc();
 	if (ret) {
 		pr_err("Failed to allocate SMMUv2 array: %d\n", ret);
@@ -710,12 +809,12 @@ static int __init kvm_arm_smmu_v2_register(void)
 	}
 
 	/*
-	 * Store array pointers in nVHE symbols for EL2 access.
-	 * These variables are in the nVHE image and won't be accessible
-	 * after KVM initialization. Ownership transfers to EL2.
+	 * Store array base and count in nVHE symbols for EL2 access.
+	 * These variables are in the nVHE image and accessible by EL2.
+	 * EL2 will convert kernel VA to hyp VA using kern_hyp_va().
 	 */
-	for (int i = 0; i < kvm_arm_smmu_v2_count; i++)
-		kvm_hyp_arm_smmu_v2_smmus[i] = &kvm_arm_smmu_v2_array[i];
+	kvm_hyp_arm_smmu_v2_smmus = kvm_arm_smmu_v2_array;
+	kvm_hyp_arm_smmu_v2_count = kvm_arm_smmu_v2_count;
 
 	pr_info("ARM SMMUv2 pKVM driver registered (%zu instances, %zu pages)\n",
 		kvm_arm_smmu_v2_count, nr_pages);

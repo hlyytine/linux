@@ -16,16 +16,36 @@
 #include <asm/kvm_mmu.h>
 #include <nvhe/iommu.h>
 #include <nvhe/memory.h>
+#include <nvhe/mem_protect.h>
 #include <nvhe/mm.h>
+#include <nvhe/trap_handler.h>
 
 #include "arm-smmu-v2.h"
+#include <nvhe/serial.h>
 #include "../../../io-pgtable-arm.h"
 
 /*
  * Global State
  */
-struct hyp_arm_smmu_v2_device *kvm_hyp_arm_smmu_v2_smmus[ARM_SMMU_MAX_INSTANCES];
+struct hyp_arm_smmu_v2_device *kvm_hyp_arm_smmu_v2_smmus;
+size_t kvm_hyp_arm_smmu_v2_count;
 struct sid_assignment sid_map[ARM_SMMU_MAX_SIDS];
+
+/*
+ * Memory Donation Helpers
+ */
+
+/* Transfer ownership of memory from host to hypervisor */
+static int smmu_take_pages(u64 phys, size_t size)
+{
+	if (!IS_ALIGNED(phys, PAGE_SIZE) || !IS_ALIGNED(size, PAGE_SIZE)) {
+		HYP_ERR("SMMU: smmu_take_pages called with unaligned address/size: phys=%llx size=%lx",
+			phys, size);
+		return -EINVAL;
+	}
+
+	return __pkvm_host_donate_hyp(phys >> PAGE_SHIFT, size >> PAGE_SHIFT);
+}
 
 /*
  * Global identity-mapped page table (protected by host_mmu.lock from core code)
@@ -483,10 +503,8 @@ static void smmu_v2_tlb_flush_walk(unsigned long iova, size_t size,
 	int i;
 
 	/* Invalidate on ALL SMMU instances (global identity mapping) */
-	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
-		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
-		if (!smmu)
-			continue;
+	for (i = 0; i < kvm_hyp_arm_smmu_v2_count; i++) {
+		smmu = &kvm_hyp_arm_smmu_v2_smmus[i];
 
 		/* Global TLB invalidation (all VMIDs) */
 		smmu_v2_tlb_inv_context(smmu, 0);  /* CB 0 - could be any CB */
@@ -538,10 +556,8 @@ static int smmu_v2_init_pgt(void)
 	int i;
 
 	/* Determine common capabilities across all SMMU instances */
-	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
-		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
-		if (!smmu)
-			continue;
+	for (i = 0; i < kvm_hyp_arm_smmu_v2_count; i++) {
+		smmu = &kvm_hyp_arm_smmu_v2_smmus[i];
 
 		/* Use minimum IAS/OAS across all SMMUs */
 		if (smmu->ias < cfg.ias)
@@ -585,11 +601,59 @@ static int smmu_v2_init_pgt(void)
 int smmu_v2_init(struct hyp_arm_smmu_v2_device *smmu)
 {
 	int ret, i;
+	unsigned long base_va, base_sec_va;
 
-	/* Validate that shadow arrays have been set up */
-	if (!smmu->smrs_shadow || !smmu->s2crs_shadow ||
-	    !smmu->smrs_hw || !smmu->s2crs_hw) {
-		return -EINVAL;  /* Shadow arrays not donated from EL1 */
+	/*
+	 * Note: UART debugging is provided by pKVM serial framework.
+	 * Ensure pkvm-pl011 module is loaded before this driver.
+	 */
+
+	HYP_INFO("running smmu_v2_init()");
+
+	/*
+	 * Shadow arrays are NULL initially (not allocated by EL1).
+	 * We'll allocate them from hyp memory pool after probing hardware.
+	 */
+
+	/* Skip invalid SMMU instances (not populated by EL1) */
+	if (!smmu->mmio_addr || !smmu->mmio_size) {
+		HYP_INFO("SMMU[%u]: Skipping - invalid configuration (PA=0x%llx, size=0x%zx)",
+			 smmu->id, smmu->mmio_addr, smmu->mmio_size);
+		return -ENODEV;
+	}
+
+	/* Validate MMIO address alignment */
+	if (!PAGE_ALIGNED(smmu->mmio_addr | smmu->mmio_size))
+		return -EINVAL;
+
+	/* Create private mapping for SMMU MMIO region in EL2 page tables */
+	ret = __pkvm_create_private_mapping(smmu->mmio_addr, smmu->mmio_size,
+					    KVM_PGTABLE_PROT_R | KVM_PGTABLE_PROT_W | KVM_PGTABLE_PROT_DEVICE,
+					    &base_va);
+	if (ret) {
+		HYP_ERR("SMMU[%u]: Failed to create MMIO mapping for PA 0x%llx (ret=%d)",
+			smmu->id, smmu->mmio_addr, ret);
+		return ret;
+	}
+
+	smmu->base = (void __iomem *)base_va;
+	HYP_INFO("SMMU[%u]: Mapped MMIO: PA 0x%llx -> VA %p, size=0x%lx",
+		 smmu->id, smmu->mmio_addr, smmu->base, smmu->mmio_size);
+
+	/* Map secondary MMIO base if present (Tegra234 dual-base instances) */
+	if (smmu->has_secondary_base && smmu->mmio_addr_sec) {
+		ret = __pkvm_create_private_mapping(smmu->mmio_addr_sec, smmu->mmio_size,
+						    KVM_PGTABLE_PROT_R | KVM_PGTABLE_PROT_W | KVM_PGTABLE_PROT_DEVICE,
+						    &base_sec_va);
+		if (ret) {
+			HYP_ERR("SMMU[%u]: Failed to create secondary MMIO mapping for PA 0x%llx (ret=%d)",
+				smmu->id, smmu->mmio_addr_sec, ret);
+			return ret;
+		}
+
+		smmu->base_sec = (void __iomem *)base_sec_va;
+		HYP_INFO("SMMU[%u]: Mapped secondary MMIO: PA 0x%llx -> VA %p",
+			 smmu->id, smmu->mmio_addr_sec, smmu->base_sec);
 	}
 
 	hyp_spin_lock_init(&smmu->lock);
@@ -598,6 +662,43 @@ int smmu_v2_init(struct hyp_arm_smmu_v2_device *smmu)
 	ret = smmu_v2_probe_device(smmu);
 	if (ret)
 		return ret;
+
+	/* Allocate shadow arrays from hyp memory pool (now that we know num_mapping_groups) */
+	{
+		size_t smr_size = smmu->num_mapping_groups * sizeof(struct arm_smmu_smr);
+		size_t s2cr_size = smmu->num_mapping_groups * sizeof(struct arm_smmu_s2cr);
+
+		smmu->smrs_shadow = kvm_iommu_donate_pages_atomic(get_order(smr_size));
+		if (!smmu->smrs_shadow) {
+			HYP_ERR("SMMU[%u]: Failed to allocate smrs_shadow (%zu bytes)",
+				smmu->id, smr_size);
+			return -ENOMEM;
+		}
+
+		smmu->s2crs_shadow = kvm_iommu_donate_pages_atomic(get_order(s2cr_size));
+		if (!smmu->s2crs_shadow) {
+			HYP_ERR("SMMU[%u]: Failed to allocate s2crs_shadow (%zu bytes)",
+				smmu->id, s2cr_size);
+			return -ENOMEM;
+		}
+
+		smmu->smrs_hw = kvm_iommu_donate_pages_atomic(get_order(smr_size));
+		if (!smmu->smrs_hw) {
+			HYP_ERR("SMMU[%u]: Failed to allocate smrs_hw (%zu bytes)",
+				smmu->id, smr_size);
+			return -ENOMEM;
+		}
+
+		smmu->s2crs_hw = kvm_iommu_donate_pages_atomic(get_order(s2cr_size));
+		if (!smmu->s2crs_hw) {
+			HYP_ERR("SMMU[%u]: Failed to allocate s2crs_hw (%zu bytes)",
+				smmu->id, s2cr_size);
+			return -ENOMEM;
+		}
+
+		HYP_INFO("SMMU[%u]: Allocated shadow arrays (%u entries, %zu bytes each)",
+			 smmu->id, smmu->num_mapping_groups, smr_size + s2cr_size);
+	}
 
 	/* Initialize context bank bitmap (all free initially) */
 	bitmap_zero(smmu->context_map, ARM_SMMU_MAX_CBS);
@@ -871,7 +972,7 @@ int smmu_v2_handle_gr1(struct hyp_arm_smmu_v2_device *smmu, u32 offset,
 			 */
 			if (smmu->cb_state[cb_idx].active &&
 			    smmu->cb_state[cb_idx].domain_id != 0) {
-				u32 cbar_type = FIELD_GET(ARM_SMMU_CBAR_TYPE, val32);
+				u32 __maybe_unused cbar_type = FIELD_GET(ARM_SMMU_CBAR_TYPE, val32);
 
 				/*
 				 * Force Stage-2-only translation for protected domains.
@@ -880,7 +981,7 @@ int smmu_v2_handle_gr1(struct hyp_arm_smmu_v2_device *smmu, u32 offset,
 				val32 &= ~ARM_SMMU_CBAR_TYPE;
 				val32 |= FIELD_PREP(ARM_SMMU_CBAR_TYPE, CBAR_TYPE_S2_TRANS);
 
-				hyp_dbg("SMMU[%u]: CB%u forced Stage-2 (host requested type=%u)\n",
+				HYP_DBG("SMMU[%u]: CB%u forced Stage-2 (host requested type=%u)\n",
 					smmu->id, cb_idx, cbar_type);
 			}
 
@@ -1073,7 +1174,7 @@ int smmu_v2_handle_cb(struct hyp_arm_smmu_v2_device *smmu, u32 offset,
 				 * This was set during smmu_v2_init_context_bank().
 				 * Do NOT overwrite it with host's value.
 				 */
-				hyp_dbg("SMMU[%u]: CB%u TTBR0 write shadowed (0x%llx), HW unchanged\n",
+				HYP_DBG("SMMU[%u]: CB%u TTBR0 write shadowed (0x%llx), HW unchanged\n",
 					smmu->id, cb_idx, val64);
 				return 0;
 			} else {
@@ -1341,20 +1442,28 @@ bool smmu_v2_mmio_handler(u64 addr, bool is_write, u64 *val)
  */
 u8 smmu_v2_alloc_context_bank(struct hyp_arm_smmu_v2_device *smmu)
 {
-	unsigned long idx;
+	u32 i;
+	u32 word_idx, bit_idx;
+	unsigned long *map = smmu->context_map;
 
 	hyp_spin_lock(&smmu->lock);
-	idx = find_first_zero_bit(smmu->context_map, smmu->num_context_banks);
-	if (idx >= smmu->num_context_banks) {
-		hyp_spin_unlock(&smmu->lock);
-		return ARM_SMMU_INVALID_CB;
+
+	/* Manually search for first zero bit */
+	for (i = 0; i < smmu->num_context_banks; i++) {
+		word_idx = i / BITS_PER_LONG;
+		bit_idx = i % BITS_PER_LONG;
+
+		if (!(map[word_idx] & (1UL << bit_idx))) {
+			/* Found free CB - mark as allocated */
+			map[word_idx] |= (1UL << bit_idx);
+			smmu->cb_state[i].active = true;
+			hyp_spin_unlock(&smmu->lock);
+			return i;
+		}
 	}
 
-	__set_bit(idx, smmu->context_map);
-	smmu->cb_state[idx].active = true;
 	hyp_spin_unlock(&smmu->lock);
-
-	return idx;
+	return ARM_SMMU_INVALID_CB;
 }
 
 /**
@@ -1364,11 +1473,18 @@ u8 smmu_v2_alloc_context_bank(struct hyp_arm_smmu_v2_device *smmu)
  */
 void smmu_v2_free_context_bank(struct hyp_arm_smmu_v2_device *smmu, u8 idx)
 {
+	u32 word_idx, bit_idx;
+	unsigned long *map = smmu->context_map;
+
 	if (idx >= smmu->num_context_banks)
 		return;
 
+	word_idx = idx / BITS_PER_LONG;
+	bit_idx = idx % BITS_PER_LONG;
+
 	hyp_spin_lock(&smmu->lock);
-	__clear_bit(idx, smmu->context_map);
+	/* Clear the bit manually */
+	map[word_idx] &= ~(1UL << bit_idx);
 	smmu->cb_state[idx].active = false;
 	smmu->cb_state[idx].domain_id = 0;
 	hyp_spin_unlock(&smmu->lock);
@@ -1390,7 +1506,7 @@ int smmu_v2_init_context_bank(struct hyp_arm_smmu_v2_device *smmu,
 	struct smmu_v2_cb_state *cb = &smmu->cb_state[cb_idx];
 	struct io_pgtable_cfg *pgt_cfg;
 	u32 cbar, vtcr, sctlr, cb_page;
-	u64 ttbr0, mair;
+	u64 ttbr0;
 
 	if (cb_idx >= smmu->num_context_banks)
 		return -EINVAL;
@@ -1450,6 +1566,65 @@ int smmu_v2_init_context_bank(struct hyp_arm_smmu_v2_device *smmu,
 	return 0;
 }
 
+/*
+ * Early UART initialization for debugging before pkvm-pl011 module loads.
+ * This creates a proper EL2 private mapping of the UART MMIO region.
+ */
+static void __iomem *early_uart_base;
+
+#define EARLY_UART_BASE_PHYS	0x31d0000   /* Tegra234 UARTI */
+#define EARLY_UARTDR		0x00
+#define EARLY_UARTFR		0x18
+#define EARLY_UARTFR_TXFF	(1 << 5)
+#define EARLY_UARTFR_BUSY	(1 << 3)
+
+static void early_uart_putc(char c)
+{
+	if (!early_uart_base)
+		return;
+
+	/* Wait until TX FIFO not full */
+	while (readl_relaxed(early_uart_base + EARLY_UARTFR) & EARLY_UARTFR_TXFF)
+		;
+
+	writel_relaxed(c, early_uart_base + EARLY_UARTDR);
+
+	/* Wait until UART not busy */
+	while (readl_relaxed(early_uart_base + EARLY_UARTFR) & EARLY_UARTFR_BUSY)
+		;
+}
+
+static int smmu_v2_early_uart_init(void)
+{
+	unsigned long va = 0;
+	int ret;
+
+	/*
+	 * Create EL2 private mapping for UART MMIO.
+	 * __pkvm_create_private_mapping() allocates VA and creates mapping.
+	 */
+	ret = __pkvm_create_private_mapping(EARLY_UART_BASE_PHYS, PAGE_SIZE,
+					    PAGE_HYP_DEVICE, &va);
+	if (ret)
+		return ret;
+
+	early_uart_base = (void __iomem *)va;
+
+	/* Register as serial driver for pKVM framework */
+	ret = __pkvm_register_serial_driver(early_uart_putc);
+	if (ret) {
+		/*
+		 * Someone else already registered (e.g., pkvm-pl011 module).
+		 * That's fine - just clear our pointer and return error.
+		 * Note: VA ranges cannot be freed in pKVM (they grow monotonically).
+		 */
+		early_uart_base = NULL;
+		return ret;
+	}
+
+	return 0;
+}
+
 /**
  * smmu_v2_global_init - Global initialization for all SMMU instances
  *
@@ -1465,21 +1640,67 @@ int smmu_v2_global_init(void)
 	struct hyp_arm_smmu_v2_device *smmu;
 	int i, ret;
 
+	/*
+	 * Initialize early UART for debugging (before pkvm-pl011 module loads).
+	 * This creates a proper EL2 private mapping of the UART MMIO.
+	 * Non-fatal if it fails - we'll just have no early debug output.
+	 */
+	ret = smmu_v2_early_uart_init();
+	if (ret) {
+		/* Continue without UART - debug output will be silent */
+	}
+
+	HYP_INFO("SMMUv2: Starting global initialization");
+
+	/*
+	 * Convert array base from kernel VA to hyp VA.
+	 * Then donate the memory to make it accessible to EL2.
+	 */
+	if (kvm_hyp_arm_smmu_v2_smmus) {
+		size_t smmu_arr_size;
+
+		kvm_hyp_arm_smmu_v2_smmus = kern_hyp_va(kvm_hyp_arm_smmu_v2_smmus);
+
+		/* Calculate array size and donate memory to EL2 (must be page-aligned) */
+		smmu_arr_size = PAGE_ALIGN(sizeof(struct hyp_arm_smmu_v2_device) * kvm_hyp_arm_smmu_v2_count);
+		ret = smmu_take_pages(hyp_virt_to_phys((void *)kvm_hyp_arm_smmu_v2_smmus),
+				      smmu_arr_size);
+		if (ret) {
+			HYP_ERR("SMMUv2: Failed to donate SMMU array memory (ret=%d)", ret);
+			return ret;
+		}
+
+		HYP_INFO("SMMUv2: Donated SMMU array: %zu bytes for %zu instances",
+			 smmu_arr_size, kvm_hyp_arm_smmu_v2_count);
+	}
+
 	/* Initialize each SMMU instance */
-	for (i = 0; i < ARM_SMMU_MAX_INSTANCES; i++) {
-		smmu = kvm_hyp_arm_smmu_v2_smmus[i];
-		if (!smmu)
-			continue;
+	for (i = 0; i < kvm_hyp_arm_smmu_v2_count; i++) {
+		smmu = &kvm_hyp_arm_smmu_v2_smmus[i];
+
+		HYP_INFO("SMMUv2: Initializing SMMU instance %u at PA 0x%llx",
+			 i, smmu->mmio_addr);
+
+		/*
+		 * Shadow arrays are NULL initially (not set by EL1).
+		 * smmu_v2_init() will allocate them from hyp memory pool.
+		 */
 
 		ret = smmu_v2_init(smmu);
-		if (WARN_ON(ret))
+		if (WARN_ON(ret)) {
+			HYP_ERR("SMMUv2: Failed to init SMMU %u (ret=%d)", i, ret);
 			return ret;
+		}
+
+		HYP_INFO("SMMUv2: SMMU %u initialization complete", i);
 	}
 
 	/* Initialize global identity-mapped page table (shared by all SMMUs) */
 	ret = smmu_v2_init_pgt();
 	if (WARN_ON(ret))
 		return ret;
+
+	HYP_INFO("SMMUv2: Global initialization complete");
 
 	return 0;
 }
@@ -1548,13 +1769,13 @@ int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx)
 	u32 smr_val, s2cr_val;
 
 	if (sid >= ARM_SMMU_MAX_SIDS) {
-		hyp_err("SMMU[%u]: Invalid SID %u (max %u)\n",
+		HYP_ERR("SMMU[%u]: Invalid SID %u (max %u)\n",
 			smmu->id, sid, ARM_SMMU_MAX_SIDS - 1);
 		return -EINVAL;
 	}
 
 	if (cb_idx >= smmu->num_context_banks) {
-		hyp_err("SMMU[%u]: Invalid CB index %u (max %u)\n",
+		HYP_ERR("SMMU[%u]: Invalid CB index %u (max %u)\n",
 			smmu->id, cb_idx, smmu->num_context_banks - 1);
 		return -EINVAL;
 	}
@@ -1569,7 +1790,7 @@ int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx)
 		}
 
 		/* Mapped to different CB - this is an error */
-		hyp_err("SMMU[%u]: SID %u already mapped to CB %u (tried to map to CB %u)\n",
+		HYP_ERR("SMMU[%u]: SID %u already mapped to CB %u (tried to map to CB %u)\n",
 			smmu->id, sid, smmu->s2crs_hw[sme_idx].cbndx, cb_idx);
 		return -EEXIST;
 	}
@@ -1577,7 +1798,7 @@ int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx)
 	/* Find free SME (Stream Mapping Entry) */
 	sme_idx = smmu_v2_find_free_sme(smmu);
 	if (sme_idx < 0) {
-		hyp_err("SMMU[%u]: No free stream mapping entries\n", smmu->id);
+		HYP_ERR("SMMU[%u]: No free stream mapping entries\n", smmu->id);
 		return sme_idx;
 	}
 
@@ -1706,7 +1927,7 @@ int smmu_v2_tlb_sync_global(struct hyp_arm_smmu_v2_device *smmu)
 	} while (timeout);
 
 	/* Timeout - hardware error */
-	hyp_err("SMMU[%u]: Global TLB sync timeout (GSACTIVE still set)\n", smmu->id);
+	HYP_ERR("SMMU[%u]: Global TLB sync timeout (GSACTIVE still set)\n", smmu->id);
 	return -ETIMEDOUT;
 }
 
@@ -1745,7 +1966,7 @@ int smmu_v2_tlb_sync_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx)
 	} while (timeout);
 
 	/* Timeout - hardware error */
-	hyp_err("SMMU[%u]: Context bank %u TLB sync timeout (SACTIVE still set)\n",
+	HYP_ERR("SMMU[%u]: Context bank %u TLB sync timeout (SACTIVE still set)\n",
 		smmu->id, cb_idx);
 	return -ETIMEDOUT;
 }
@@ -1769,7 +1990,7 @@ void smmu_v2_tlb_inv_context(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx)
 	/* Ensure invalidation completes */
 	ret = smmu_v2_tlb_sync_global(smmu);
 	if (ret)
-		hyp_err("SMMU[%u]: TLB sync failed after context invalidation (CB %u, VMID %u)\n",
+		HYP_ERR("SMMU[%u]: TLB sync failed after context invalidation (CB %u, VMID %u)\n",
 			smmu->id, cb_idx, cb->vmid);
 }
 
@@ -1830,7 +2051,7 @@ void smmu_v2_tlb_inv_range(struct hyp_arm_smmu_v2_device *smmu, u8 cb_idx,
 	/* Ensure TLB invalidations complete */
 	ret = smmu_v2_tlb_sync_context(smmu, cb_idx);
 	if (ret)
-		hyp_err("SMMU[%u]: TLB sync failed after range invalidation\n", smmu->id);
+		HYP_ERR("SMMU[%u]: TLB sync failed after range invalidation\n", smmu->id);
 }
 
 /*
@@ -1924,29 +2145,25 @@ int smmu_v2_alloc_domain(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *do
 	int ret;
 
 	/* Validate SMMU instance ID */
-	if (iommu_id >= ARM_SMMU_MAX_INSTANCES) {
-		hyp_err("SMMU: Invalid iommu_id %u (max %u)\n",
-			iommu_id, ARM_SMMU_MAX_INSTANCES - 1);
+	if (iommu_id >= kvm_hyp_arm_smmu_v2_count) {
+		HYP_ERR("SMMU: Invalid iommu_id %u (max %zu)\n",
+			iommu_id, kvm_hyp_arm_smmu_v2_count - 1);
 		return -EINVAL;
 	}
 
-	smmu = kvm_hyp_arm_smmu_v2_smmus[iommu_id];
-	if (!smmu) {
-		hyp_err("SMMU: Instance %u not initialized\n", iommu_id);
-		return -ENODEV;
-	}
+	smmu = &kvm_hyp_arm_smmu_v2_smmus[iommu_id];
 
 	/* Allocate domain-specific state */
 	smmu_domain = kvm_iommu_donate_page();
 	if (!smmu_domain) {
-		hyp_err("SMMU[%u]: Failed to allocate domain structure\n", smmu->id);
+		HYP_ERR("SMMU[%u]: Failed to allocate domain structure\n", smmu->id);
 		return -ENOMEM;
 	}
 
 	/* Allocate a context bank */
 	cb_idx = smmu_v2_alloc_context_bank(smmu);
 	if (cb_idx == ARM_SMMU_INVALID_CB) {
-		hyp_err("SMMU[%u]: No free context banks\n", smmu->id);
+		HYP_ERR("SMMU[%u]: No free context banks\n", smmu->id);
 		ret = -ENOSPC;
 		goto err_free_domain;
 	}
@@ -1954,12 +2171,12 @@ int smmu_v2_alloc_domain(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *do
 	/* Initialize domain private state */
 	smmu_domain->smmu = smmu;
 	smmu_domain->cb_idx = cb_idx;
-	smmu_domain->pgtbl_ops = idmap_pgtable->ops;  /* Use global identity PT */
+	smmu_domain->pgtbl_ops = &idmap_pgtable->ops;  /* Use global identity PT */
 
 	/* Initialize context bank with Stage-2 translation */
 	ret = smmu_v2_init_context_bank(smmu, domain, cb_idx);
 	if (ret) {
-		hyp_err("SMMU[%u]: Failed to initialize CB%u (ret=%d)\n",
+		HYP_ERR("SMMU[%u]: Failed to initialize CB%u (ret=%d)\n",
 			smmu->id, cb_idx, ret);
 		goto err_free_cb;
 	}
@@ -1971,7 +2188,7 @@ int smmu_v2_alloc_domain(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *do
 	/* Link domain private data */
 	domain->priv = smmu_domain;
 
-	hyp_info("SMMU[%u]: Allocated domain %u with CB%u\n",
+	HYP_INFO("SMMU[%u]: Allocated domain %u with CB%u\n",
 		 smmu->id, domain->domain_id, cb_idx);
 
 	return 0;
@@ -2017,7 +2234,7 @@ void smmu_v2_free_domain(struct kvm_hyp_iommu_domain *domain)
 	kvm_iommu_reclaim_page(smmu_domain);
 	domain->priv = NULL;
 
-	hyp_info("SMMU[%u]: Freed domain %u (CB%u)\n",
+	HYP_INFO("SMMU[%u]: Freed domain %u (CB%u)\n",
 		 smmu->id, domain->domain_id, cb_idx);
 }
 
@@ -2050,7 +2267,7 @@ int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	int ret;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return -EINVAL;
 	}
 
@@ -2059,7 +2276,7 @@ int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 
 	/* Validate Stream ID */
 	if (sid >= ARM_SMMU_MAX_SIDS) {
-		hyp_err("SMMU[%u]: Invalid SID %u (max %u)\n",
+		HYP_ERR("SMMU[%u]: Invalid SID %u (max %u)\n",
 			smmu->id, sid, ARM_SMMU_MAX_SIDS - 1);
 		return -EINVAL;
 	}
@@ -2067,7 +2284,7 @@ int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	/* Configure stream mapping (SMR+S2CR) */
 	ret = smmu_v2_map_stream(smmu, sid, cb_idx);
 	if (ret) {
-		hyp_err("SMMU[%u]: Failed to map SID %u to CB%u (ret=%d)\n",
+		HYP_ERR("SMMU[%u]: Failed to map SID %u to CB%u (ret=%d)\n",
 			smmu->id, sid, cb_idx, ret);
 		return ret;
 	}
@@ -2076,13 +2293,13 @@ int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	ret = smmu_v2_assign_sid(smmu->id, sid, 0 /* client_id unknown at attach */,
 				 domain->domain_id);
 	if (ret) {
-		hyp_err("SMMU[%u]: Failed to assign SID %u (ret=%d)\n",
+		HYP_ERR("SMMU[%u]: Failed to assign SID %u (ret=%d)\n",
 			smmu->id, sid, ret);
 		smmu_v2_unmap_stream(smmu, sid);  /* Undo stream mapping */
 		return ret;
 	}
 
-	hyp_info("SMMU[%u]: Attached SID %u to domain %u (CB%u)\n",
+	HYP_INFO("SMMU[%u]: Attached SID %u to domain %u (CB%u)\n",
 		 smmu->id, sid, domain->domain_id, cb_idx);
 
 	return 0;
@@ -2109,7 +2326,7 @@ int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	int ret;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return -EINVAL;
 	}
 
@@ -2118,7 +2335,7 @@ int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	/* Release SID assignment */
 	ret = smmu_v2_release_sid(smmu->id, sid);
 	if (ret) {
-		hyp_err("SMMU[%u]: Failed to release SID %u (ret=%d)\n",
+		HYP_ERR("SMMU[%u]: Failed to release SID %u (ret=%d)\n",
 			smmu->id, sid, ret);
 		/* Continue anyway - best effort cleanup */
 	}
@@ -2126,7 +2343,7 @@ int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	/* Clear stream mapping (sets to FAULT mode) */
 	ret = smmu_v2_unmap_stream(smmu, sid);
 	if (ret) {
-		hyp_err("SMMU[%u]: Failed to unmap SID %u (ret=%d)\n",
+		HYP_ERR("SMMU[%u]: Failed to unmap SID %u (ret=%d)\n",
 			smmu->id, sid, ret);
 		return ret;
 	}
@@ -2134,7 +2351,7 @@ int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 	/* Invalidate TLB for this context bank */
 	smmu_v2_tlb_inv_context(smmu, smmu_domain->cb_idx);
 
-	hyp_info("SMMU[%u]: Detached SID %u from domain %u\n",
+	HYP_INFO("SMMU[%u]: Detached SID %u from domain %u\n",
 		 smmu->id, sid, domain->domain_id);
 
 	return 0;
@@ -2168,26 +2385,26 @@ int smmu_v2_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
 	int ret;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return -EINVAL;
 	}
 
 	ops = smmu_domain->pgtbl_ops;
 	if (!ops || !ops->map_pages) {
-		hyp_err("SMMU: Domain %u has no page table ops\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no page table ops\n", domain->domain_id);
 		return -ENODEV;
 	}
 
 	/* Validate page size (Tegra234: 4K only) */
 	if (pgsize != SZ_4K) {
-		hyp_err("SMMU: Unsupported page size %zu (only 4K supported)\n", pgsize);
+		HYP_ERR("SMMU: Unsupported page size %zu (only 4K supported)\n", pgsize);
 		return -EINVAL;
 	}
 
 	/* Map pages using io-pgtable */
 	ret = ops->map_pages(ops, iova, paddr, pgsize, pgcount, prot, GFP_KERNEL, &mapped);
 	if (ret) {
-		hyp_err("SMMU: Failed to map IOVA 0x%lx → PA 0x%llx (ret=%d, mapped=%zu)\n",
+		HYP_ERR("SMMU: Failed to map IOVA 0x%lx → PA 0x%llx (ret=%d, mapped=%zu)\n",
 			iova, (unsigned long long)paddr, ret, mapped);
 		if (total_mapped)
 			*total_mapped = mapped;
@@ -2218,20 +2435,20 @@ size_t smmu_v2_unmap_pages(struct kvm_hyp_iommu_domain *domain, unsigned long io
 	size_t unmapped;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return 0;
 	}
 
 	ops = smmu_domain->pgtbl_ops;
 	if (!ops || !ops->unmap_pages) {
-		hyp_err("SMMU: Domain %u has no page table ops\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no page table ops\n", domain->domain_id);
 		return 0;
 	}
 
 	/* Unmap pages using io-pgtable */
 	unmapped = ops->unmap_pages(ops, iova, pgsize, pgcount, gather);
 	if (unmapped != pgcount * pgsize) {
-		hyp_err("SMMU: Partial unmap at IOVA 0x%lx (requested=%zu, unmapped=%zu)\n",
+		HYP_ERR("SMMU: Partial unmap at IOVA 0x%lx (requested=%zu, unmapped=%zu)\n",
 			iova, pgcount * pgsize, unmapped);
 	}
 
@@ -2252,13 +2469,13 @@ phys_addr_t smmu_v2_iova_to_phys(struct kvm_hyp_iommu_domain *domain, unsigned l
 	phys_addr_t paddr;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return 0;
 	}
 
 	ops = smmu_domain->pgtbl_ops;
 	if (!ops || !ops->iova_to_phys) {
-		hyp_err("SMMU: Domain %u has no page table ops\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no page table ops\n", domain->domain_id);
 		return 0;
 	}
 
@@ -2283,7 +2500,7 @@ void smmu_v2_iotlb_sync(struct kvm_hyp_iommu_domain *domain, struct iommu_iotlb_
 	u8 cb_idx;
 
 	if (!smmu_domain) {
-		hyp_err("SMMU: Domain %u has no private data\n", domain->domain_id);
+		HYP_ERR("SMMU: Domain %u has no private data\n", domain->domain_id);
 		return;
 	}
 
@@ -2315,8 +2532,8 @@ static void smmu_v2_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int pr
 	size_t mapped;
 	int ret;
 
-	if (!idmap_pgtable || !idmap_pgtable->ops) {
-		hyp_err("SMMU: Global page table not initialized\n");
+	if (!idmap_pgtable) {
+		HYP_ERR("SMMU: Global page table not initialized\n");
 		return;
 	}
 
@@ -2328,7 +2545,7 @@ static void smmu_v2_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int pr
 
 	ret = ops->map_pages(ops, start, start, pgsize, pgcount, prot, GFP_KERNEL, &mapped);
 	if (ret) {
-		hyp_err("SMMU: Failed to identity-map PA 0x%llx-0x%llx (ret=%d, mapped=%zu)\n",
+		HYP_ERR("SMMU: Failed to identity-map PA 0x%llx-0x%llx (ret=%d, mapped=%zu)\n",
 			(unsigned long long)start, (unsigned long long)end, ret, mapped);
 	}
 }
@@ -2353,7 +2570,7 @@ static bool smmu_v2_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 
 	/* Read value from register if write */
 	if (is_write)
-		val = cpu_reg(regs, rt);
+		val = regs->regs[rt];
 
 	/* Handle MMIO access */
 	handled = smmu_v2_mmio_handler(addr, is_write, &val);
@@ -2361,7 +2578,7 @@ static bool smmu_v2_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 	if (handled) {
 		/* Write result to register if read */
 		if (!is_write)
-			cpu_reg(regs, rt) = val;
+			regs->regs[rt] = val;
 
 		/* Advance PC to next instruction */
 		regs->pc += 4;
@@ -2372,9 +2589,10 @@ static bool smmu_v2_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 
 /*
  * IOMMU Operations Structure
+ * Exported for EL1 registration via kvm_iommu_register_driver()
  */
 
-static struct kvm_iommu_ops smmu_v2_ops = {
+struct kvm_iommu_ops smmu_v2_ops = {
 	.init			= smmu_v2_global_init,
 	.host_stage2_idmap	= smmu_v2_host_stage2_idmap,
 	.dabt_handler		= smmu_v2_dabt_handler,

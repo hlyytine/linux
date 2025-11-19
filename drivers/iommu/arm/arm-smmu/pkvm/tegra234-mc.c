@@ -14,8 +14,11 @@
 #include <asm/kvm_mmu.h>
 #include <nvhe/iommu.h>
 #include <nvhe/memory.h>
+#include <nvhe/mem_protect.h>
+#include <dt-bindings/memory/tegra234-mc.h>
 
 #include "arm-smmu-v2.h"
+#include <nvhe/serial.h>
 
 /* Memory Controller instance */
 struct hyp_tegra_mc tegra234_mc;
@@ -148,7 +151,7 @@ int mc_init(phys_addr_t mmio_addr, size_t mmio_size)
 	for (i = 0; i < nr_pages; i++) {
 		ret = __pkvm_host_share_hyp((page_base + (i << PAGE_SHIFT)) >> PAGE_SHIFT);
 		if (ret) {
-			hyp_err("MC: Failed to share page %u (ret=%d)\n", i, ret);
+			HYP_ERR("MC: Failed to share page %u (ret=%d)\n", i, ret);
 			goto err_unshare;
 		}
 	}
@@ -158,7 +161,7 @@ int mc_init(phys_addr_t mmio_addr, size_t mmio_size)
 	ret = hyp_pin_shared_mem(hyp_phys_to_virt(page_base),
 				  hyp_phys_to_virt(page_base + (nr_pages << PAGE_SHIFT)));
 	if (ret) {
-		hyp_err("MC: Failed to pin shared memory (ret=%d)\n", ret);
+		HYP_ERR("MC: Failed to pin shared memory (ret=%d)\n", ret);
 		goto err_unshare;
 	}
 
@@ -177,7 +180,6 @@ int mc_init(phys_addr_t mmio_addr, size_t mmio_size)
 
 	return 0;
 
-err_unpin:
 	hyp_unpin_shared_mem(hyp_phys_to_virt(page_base),
 			     hyp_phys_to_virt(page_base + (nr_pages << PAGE_SHIFT)));
 err_unshare:
@@ -264,14 +266,14 @@ static int mc_handle_sid_override(const struct mc_client_info *client, u32 val)
 	entry = smmu_v2_lookup_sid(sid);
 	if (!entry || !entry->active) {
 		/* SID not assigned to any domain - security violation */
-		hyp_err("MC: Client '%s' (ID 0x%x) attempted to use unassigned SID %u\n",
+		HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to use unassigned SID %u\n",
 			client->name, client->client_id, sid);
 		return -EPERM;
 	}
 
 	if (entry->client_id != client->client_id) {
 		/* SID assigned to different client - security violation */
-		hyp_err("MC: Client '%s' (ID 0x%x) attempted to steal SID %u from client ID 0x%x\n",
+		HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to steal SID %u from client ID 0x%x\n",
 			client->name, client->client_id, sid, entry->client_id);
 		return -EPERM;
 	}
@@ -394,7 +396,7 @@ bool mc_mmio_handler(u64 addr, bool is_write, u64 *val)
  *
  * Returns: Client name string, or "unknown" if not found
  */
-const char *mc_get_client_name(u32 client_id)
+static const char __maybe_unused *mc_get_client_name(u32 client_id)
 {
 	int i;
 
