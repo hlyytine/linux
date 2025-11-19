@@ -10,12 +10,15 @@
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
+#include <linux/delay.h>
 
 #include <soc/tegra/mc.h>
 
 #if defined(CONFIG_ARM_SMMU_V2_PKVM)
 #include <linux/arm-smccc.h>
 #include <asm/kvm_asm.h>
+#include <asm/virt.h>
 #endif
 
 #if defined(CONFIG_ARCH_TEGRA_186_SOC)
@@ -29,6 +32,11 @@
 #define MC_SID_STREAMID_SECURITY_OVERRIDE BIT(8)
 
 #if defined(CONFIG_ARM_SMMU_V2_PKVM)
+/* Deferred SID enumeration workqueue (waits for pKVM initialization) */
+static struct delayed_work sid_enum_work;
+static struct tegra_mc *sid_enum_mc;
+static bool sid_enum_done;
+
 /**
  * tegra186_mc_enumerate_sids() - Enumerate all Stream ID assignments from device tree
  * @mc: Memory controller instance
@@ -113,6 +121,58 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 	dev_info(mc->dev, "MC: Stream ID enumeration complete\n");
 	return 0;
 }
+
+/**
+ * pkvm_is_available() - Check if pKVM hypervisor is ready
+ *
+ * Makes a test hypercall to verify pKVM is initialized and accepting calls.
+ * Returns true if pKVM is ready, false otherwise (HVC_STUB_ERR means not ready).
+ */
+static bool pkvm_is_available(void)
+{
+	struct arm_smccc_res res;
+
+	/*
+	 * Try a benign hypercall that should succeed if pKVM is initialized.
+	 * We use __pkvm_prot_finalize with invalid arguments - it will return
+	 * an error, but NOT HVC_STUB_ERR if pKVM is running.
+	 */
+	arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_prot_finalize),
+			  0, 0, 0, 0, 0, 0, 0, &res);
+
+	/* HVC_STUB_ERR means pKVM not initialized yet */
+	return res.a0 != HVC_STUB_ERR;
+}
+
+/**
+ * tegra186_mc_sid_enum_work() - Deferred work to enumerate SIDs when pKVM is ready
+ * @work: Work structure
+ *
+ * This function is called periodically until pKVM is initialized, then performs
+ * the SID enumeration. This avoids calling hypercalls before pKVM is ready.
+ */
+static void tegra186_mc_sid_enum_work(struct work_struct *work)
+{
+	int err;
+
+	if (sid_enum_done)
+		return;
+
+	/* Check if pKVM is ready */
+	if (!pkvm_is_available()) {
+		/* Not ready yet, try again in 100ms */
+		schedule_delayed_work(&sid_enum_work, msecs_to_jiffies(100));
+		return;
+	}
+
+	/* pKVM is ready, perform enumeration */
+	dev_info(sid_enum_mc->dev, "MC: pKVM is ready, enumerating SIDs now\n");
+	err = tegra186_mc_enumerate_sids(sid_enum_mc);
+	if (err)
+		dev_err(sid_enum_mc->dev, "MC: SID enumeration failed: %d\n", err);
+
+	sid_enum_done = true;
+}
 #endif /* CONFIG_ARM_SMMU_V2_PKVM */
 
 static int tegra186_mc_probe(struct tegra_mc *mc)
@@ -166,12 +226,16 @@ populate:
 		return err;
 
 #if defined(CONFIG_ARM_SMMU_V2_PKVM)
-	/* Enumerate all SID assignments before devices probe */
-	err = tegra186_mc_enumerate_sids(mc);
-	if (err) {
-		dev_err(&pdev->dev, "failed to enumerate SIDs: %d\n", err);
-		return err;
-	}
+	/*
+	 * Schedule deferred SID enumeration work.
+	 * This will retry periodically until pKVM is initialized, then
+	 * enumerate all SID assignments before devices attach to IOMMU.
+	 */
+	sid_enum_mc = mc;
+	sid_enum_done = false;
+	INIT_DELAYED_WORK(&sid_enum_work, tegra186_mc_sid_enum_work);
+	schedule_delayed_work(&sid_enum_work, 0);
+	dev_info(&pdev->dev, "MC: Scheduled deferred SID enumeration (waiting for pKVM)\n");
 #endif
 
 	return 0;
