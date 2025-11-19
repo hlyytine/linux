@@ -395,6 +395,9 @@ static int arm_smmu_kvm_device_probe(struct platform_device *pdev)
 	u32 reg;
 	int ret;
 
+	dev_info(dev, "arm-smmu-kvm: Probing device at %pR\n",
+		 platform_get_resource(pdev, IORESOURCE_MEM, 0));
+
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu)
 		return -ENOMEM;
@@ -777,13 +780,39 @@ subsys_initcall(kvm_arm_smmu_v2_register);
 
 static int __init arm_smmu_kvm_init(void)
 {
-	/* Only load if running under pKVM */
-	if (!is_protected_kvm_enabled())
-		return -ENODEV;
+	int ret;
 
-	return platform_driver_register(&arm_smmu_kvm_driver);
+	pr_info("arm-smmu-kvm: Initializing platform driver\n");
+
+	/* Only load if running under pKVM */
+	if (!is_protected_kvm_enabled()) {
+		pr_info("arm-smmu-kvm: pKVM not enabled, skipping\n");
+		return -ENODEV;
+	}
+
+	pr_info("arm-smmu-kvm: pKVM enabled, registering platform driver\n");
+	ret = platform_driver_register(&arm_smmu_kvm_driver);
+	if (ret)
+		pr_err("arm-smmu-kvm: Failed to register platform driver: %d\n", ret);
+	else
+		pr_info("arm-smmu-kvm: Platform driver registered successfully\n");
+
+	return ret;
 }
-module_init(arm_smmu_kvm_init);
+/*
+ * Register at subsys_initcall level (very early, before device probing) to
+ * ensure this driver binds to SMMU devices before the standard arm-smmu driver.
+ * Both drivers have the same compatible string ("nvidia,tegra234-smmu"), so
+ * whichever registers first will bind to the devices.
+ *
+ * Init levels (earliest to latest):
+ *   early_initcall -> core_initcall -> postcore_initcall ->
+ *   arch_initcall -> subsys_initcall -> fs_initcall ->
+ *   device_initcall -> late_initcall -> module_init
+ *
+ * We use subsys_initcall to register before device probing begins.
+ */
+subsys_initcall_sync(arm_smmu_kvm_init);
 
 static void __exit arm_smmu_kvm_exit(void)
 {

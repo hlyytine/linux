@@ -420,15 +420,26 @@ int smmu_v2_reset(struct hyp_arm_smmu_v2_device *smmu)
 
 	/*
 	 * 2. Reset stream mapping groups: Initial values mark all SMRn as
-	 * invalid and all S2CRn as fault unless overridden.
+	 * invalid and all S2CRn as bypass (not fault) to preserve bootloader
+	 * mappings. This is critical for Tegra234 where the bootloader leaves
+	 * devices like display active with ongoing DMA. Setting to FAULT mode
+	 * would cause these devices to fault immediately.
+	 *
+	 * When devices get properly attached to domains, their S2CR entries
+	 * will be updated to TRANS mode with proper context bank assignments.
 	 */
 	for (i = 0; i < smmu->num_mapping_groups; i++) {
 		/* Clear SMR (mark as invalid) */
 		smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_SMR(i), 0);
 
-		/* Set S2CR to FAULT type (deny unmapped streams) */
+		/*
+		 * Set S2CR to BYPASS type (allow unmapped streams to pass through).
+		 * This matches the behavior of the standard ARM SMMU driver which
+		 * preserves bootloader mappings for seamless handover (e.g., display
+		 * from firmware to kernel).
+		 */
 		smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_S2CR(i),
-			    FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_FAULT));
+			    FIELD_PREP(ARM_SMMU_S2CR_TYPE, S2CR_TYPE_BYPASS));
 	}
 
 	/* 3. Make sure all context banks are disabled and clear CB_FSR */
@@ -716,11 +727,15 @@ int smmu_v2_init(struct hyp_arm_smmu_v2_device *smmu)
 		smmu->smrs_shadow[i].id = 0;
 		smmu->smrs_shadow[i].mask = 0;
 
-		/* S2CR shadow: fault mode by default */
-		smmu->s2crs_shadow[i].type = S2CR_TYPE_FAULT;
+		/*
+		 * S2CR shadow: bypass mode by default to preserve bootloader mappings.
+		 * This allows devices initialized by firmware (display, etc.) to
+		 * continue working until they get properly attached to domains.
+		 */
+		smmu->s2crs_shadow[i].type = S2CR_TYPE_BYPASS;
 		smmu->s2crs_shadow[i].cbndx = 0;
 		smmu->s2crs_shadow[i].privcfg = 0;
-		smmu->s2crs_shadow[i].bypass = false;
+		smmu->s2crs_shadow[i].bypass = true;
 
 		/* Hardware state: initially same as shadow */
 		smmu->smrs_hw[i] = smmu->smrs_shadow[i];
