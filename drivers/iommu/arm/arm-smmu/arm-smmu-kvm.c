@@ -345,163 +345,60 @@ static void arm_smmu_kvm_release_device(struct device *dev)
 }
 
 /*
- * Stream ID Population and Early Boot Timing
- * ==========================================
+ * Stream ID Registration: MC-Based Architecture
+ * ==============================================
  *
- * This driver uses the standard .of_xlate callback to populate Stream IDs from
- * device tree, following the same pattern as the standard arm-smmu driver.
+ * This driver uses the Memory Controller (MC) to register Stream ID assignments
+ * with EL2 during early boot, solving the chicken-and-egg problem where devices
+ * need Stream IDs BEFORE they can probe.
  *
- * The Challenge:
- * --------------
- * We register very early (subsys_initcall_sync at ~0.11s) to bind to SMMU devices
- * before the standard arm-smmu driver (which uses module_init at ~3.6s). However,
- * when iommu_device_register() is called this early:
- *
- * 1. It tries to configure ALL devices on system buses via bus_iommu_probe()
- * 2. Some devices have dependencies that aren't ready yet at 0.11s
- * 3. These devices return -EPROBE_DEFER from dma_configure()
- * 4. The error propagates back to iommu_device_register()
- *
- * The Solution:
+ * Architecture:
  * -------------
- * We accept -EPROBE_DEFER as a partial success:
- * - The IOMMU is successfully registered (driver binds to SMMU devices)
- * - Some devices couldn't be configured immediately (expected at early boot)
- * - The bus notifier will automatically retry configuration when devices become ready
+ * 1. MC Driver Early Init (arch_initcall, ~0.05s):
+ *    - tegra186_mc_enumerate_sids() walks ALL device tree nodes
+ *    - For each device with "iommus" + "interconnects" properties:
+ *      * Extracts Stream ID from "iommus" property
+ *      * Extracts MC client ID from "interconnects" property
+ *      * Calls kvm_call_hyp_nvhe(__pkvm_mc_register_sid, client_id, sid)
+ *    - EL2 records SID→client mapping in sid_map[] array
+ *    - This happens BEFORE any device probing begins
  *
- * Why This Works:
- * ---------------
- * 1. When a device driver probes later (e.g., MMC at ~6s), it triggers:
- *    - BUS_NOTIFY_ADD_DEVICE notification
- *    - iommu_bus_notifier() calls iommu_probe_device()
- *    - dma_configure() → of_iommu_configure() → of_xlate()
- *    - Stream ID gets populated in fwspec
+ * 2. SMMU Stub Registration (subsys_initcall_sync, ~0.11s):
+ *    - This driver binds to SMMU devices
+ *    - Registers with IOMMU framework
+ *    - NO of_xlate callback needed (MC already registered SIDs!)
  *
- * 2. The device finds its Stream ID via tegra_dev_iommu_get_stream_id()
- * 3. Device initialization succeeds (e.g., MMC mounts rootfs)
+ * 3. Device Attachment (device probe time, ~6s for MMC):
+ *    - Device driver calls iommu_attach_device()
+ *    - arm_smmu_kvm_attach_dev() is invoked
+ *    - Extracts SID from device tree via arm_smmu_kvm_get_stream_id()
+ *    - Calls kvm_iommu_attach_dev() hypercall
+ *    - EL2 validates SID was pre-registered for this client
+ *    - Attachment succeeds (MC validation passes)
  *
- * Implementation Details:
- * -----------------------
- * - of_xlate callback: Calls iommu_fwspec_add_ids() to populate Stream IDs
- * - Error handling: Accept -EPROBE_DEFER from iommu_device_register()
- * - Bus notifier: Automatically retries device configuration when ready
+ * Key Benefits:
+ * -------------
+ * - No chicken-and-egg: SIDs registered BEFORE devices probe
+ * - MC SID override validation works: EL2 knows expected assignments
+ * - MMC boots successfully: Has Stream ID when needed
+ * - Suspend/resume safe: MC re-programs SIDs, EL2 validates all writes
  *
- * This is the standard IOMMU driver pattern, adapted for early registration.
- *
- * Alternative Approach: Early MC Driver Initialization
- * =====================================================
- *
- * An alternative architectural approach would be to have the Memory Controller
- * (MC) driver initialize early and populate Stream IDs before IOMMU framework
- * device probing begins. This section documents this approach for future
- * implementation consideration.
- *
- * Motivation:
- * -----------
- * In NVIDIA's non-pKVM implementation (arm-smmu-nvidia.c + tegra186.c), the MC
- * driver programs SID override registers in the probe_finalize callback, which
- * happens AFTER device attachment. However, one could imagine splitting MC
- * functionality:
- *
- * 1. Early init (subsys_initcall_sync): Parse device tree, populate fwspec
- * 2. Late init (probe_finalize): Program MC SID override registers
- *
- * Hypothetical Implementation:
- * ---------------------------
- * static int __init tegra_mc_early_init(void)
- * {
- *     // For each device in device tree with "iommus" property:
- *     // 1. Parse Stream ID from "iommus" property
- *     // 2. Find corresponding IOMMU device (must be registered first!)
- *     // 3. Call iommu_fwspec_init() + iommu_fwspec_add_ids()
- *     // 4. Device now has Stream ID before bus probing begins
- * }
- * subsys_initcall_sync(tegra_mc_early_init);
- *
- * Advantages:
- * -----------
- * - More explicit control over Stream ID population timing
- * - Clearer separation: MC owns SID assignment, SMMU owns translation
- * - Potentially simpler to reason about (no bus notifier retry needed)
- *
- * Challenges:
- * -----------
- * 1. **iommu->ready flag**: Even with early fwspec population, the
- *    iommu->ready flag (iommu.c:2886) is only set AFTER bus_iommu_probe()
- *    succeeds. Early fwspec init would still hit -EPROBE_DEFER!
- *
- * 2. **Ordering dependencies**: MC early init must run AFTER SMMU registration
- *    (needs valid iommu_ops), but BEFORE device probing. Fragile timing.
- *
- * 3. **Duplication**: The of_xlate callback would become redundant, but
- *    removing it breaks standard Linux IOMMU patterns.
- *
- * 4. **Device tree walking**: MC driver would need to walk ALL devices in DT
- *    looking for "iommus" properties, duplicating IOMMU framework logic.
- *
- * Why Current Approach Was Chosen:
- * ---------------------------------
- * 1. **Standard Linux pattern**: of_xlate is how ALL mainline IOMMU drivers
- *    populate Stream IDs (arm-smmu, arm-smmu-v3, intel-iommu, amd-iommu)
- *
- * 2. **No duplication**: IOMMU framework already walks device tree and calls
- *    of_xlate at the right time. No need to duplicate this logic.
- *
- * 3. **Bus notifier handles retry**: The -EPROBE_DEFER retry mechanism is
- *    standard Linux behavior, well-tested, and works correctly.
- *
- * 4. **Same as non-pKVM**: The standard arm-smmu driver uses of_xlate. The
- *    ONLY difference is our early registration timing (0.11s vs 3.6s).
- *
- * 5. **Maintainability**: Following standard patterns makes the code easier
- *    to understand and maintain for kernel developers familiar with IOMMU.
- *
- * Future Consideration:
- * --------------------
- * If the current approach proves insufficient (e.g., if -EPROBE_DEFER causes
- * issues beyond expected behavior), the alternative approach could be
- * implemented. Key changes would be:
- *
- * 1. Add tegra_mc_early_init() in drivers/memory/tegra/tegra234.c
- * 2. Walk device tree for devices with "iommus" property
- * 3. Call iommu_fwspec_init() + iommu_fwspec_add_ids() for each device
- * 4. Ensure ordering: SMMU register → MC early init → device probing
- * 5. Keep of_xlate callback as fallback (for devices not in MC's list)
- *
- * Testing should verify:
- * - MMC devices get Stream IDs and mount rootfs successfully
- * - No increase in -EPROBE_DEFER beyond current implementation
- * - Suspend/resume works (MC reprograms SID overrides correctly)
+ * See drivers/memory/tegra/tegra186.c::tegra186_mc_enumerate_sids()
+ * See drivers/iommu/arm/arm-smmu/pkvm/tegra234-mc.c::mc_register_sid_mapping()
  */
 
-/**
- * arm_smmu_kvm_of_xlate - Populate Stream ID from device tree
- * @dev: Device to configure
- * @args: Device tree arguments (args[0] = Stream ID)
- *
- * Called by IOMMU framework when parsing device tree "iommus" property.
- * Extracts the Stream ID and populates the device's fwspec.
- *
- * Note: May be called very early (during iommu_device_register) when some
- * device dependencies aren't ready. This is expected - the bus notifier will
- * retry configuration when devices become ready.
+/*
+ * Note: No of_xlate callback needed! Stream IDs are registered early by
+ * the MC driver (tegra186_mc_enumerate_sids) during arch_initcall, and
+ * extracted directly from device tree during attach_dev via
+ * arm_smmu_kvm_get_stream_id(). This eliminates the chicken-and-egg
+ * problem where devices need Stream IDs before probing.
  */
-static int arm_smmu_kvm_of_xlate(struct device *dev,
-				  const struct of_phandle_args *args)
-{
-	u32 sid = 0;
-
-	if (args->args_count > 0)
-		sid = args->args[0];
-
-	return iommu_fwspec_add_ids(dev, &sid, 1);
-}
 
 static const struct iommu_ops arm_smmu_kvm_ops = {
 	.domain_alloc_paging	= arm_smmu_kvm_domain_alloc,
 	.probe_device		= arm_smmu_kvm_probe_device,
 	.release_device		= arm_smmu_kvm_release_device,
-	.of_xlate		= arm_smmu_kvm_of_xlate,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= arm_smmu_kvm_attach_dev,
