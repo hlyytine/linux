@@ -103,7 +103,7 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 					/* Register with EL2 hypervisor via SMCCC */
 					arm_smccc_1_1_hvc(KVM_HOST_SMCCC_FUNC(__pkvm_mc_register_sid),
 							  client_id, sid, 0, 0, 0, 0, 0, &res);
-					err = (int)res.a0;
+					err = (int)res.a1;  /* Return value is in X1, not X0 */
 					if (err) {
 						dev_err(mc->dev,
 							"MC: Failed to register SID mapping: %d\n",
