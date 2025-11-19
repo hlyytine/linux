@@ -2089,12 +2089,15 @@ int smmu_v2_assign_sid(u32 smmu_id, u32 sid, u32 client_id, pkvm_handle_t domain
 
 	entry = &sid_map[sid];
 
-	/* Check if already assigned */
+	/* Check if already assigned to a different domain */
 	if (entry->active && entry->domain_id != domain_id)
 		return -EBUSY;
 
+	/*
+	 * Update domain assignment. Note that client_ids[] are already
+	 * populated by MC enumeration (mc_register_sid_mapping).
+	 */
 	entry->sid = sid;
-	entry->client_id = client_id;
 	entry->domain_id = domain_id;
 	entry->smmu_id = smmu_id;
 	entry->active = true;

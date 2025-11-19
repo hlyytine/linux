@@ -224,17 +224,21 @@ const struct mc_client_info *mc_offset_to_client(u32 offset)
 int mc_validate_sid_for_client(u32 client_id, u32 sid)
 {
 	struct sid_assignment *entry;
+	int i;
 
-	/* Look up the assigned SID for this client */
+	/* Look up the assigned SID */
 	entry = smmu_v2_lookup_sid(sid);
 	if (!entry)
 		return -EPERM;  /* SID not assigned to any domain */
 
-	if (entry->client_id != client_id)
-		return -EPERM;  /* SID doesn't match this client */
+	/* Check if this client is in the list of clients for this SID */
+	for (i = 0; i < entry->num_clients; i++) {
+		if (entry->client_ids[i] == client_id)
+			return 0;  /* Valid - client is registered for this SID */
+	}
 
-	/* Valid assignment */
-	return 0;
+	/* Client not found in SID's client list */
+	return -EPERM;
 }
 
 /**
@@ -262,19 +266,17 @@ static int mc_handle_sid_override(const struct mc_client_info *client, u32 val)
 		return 0;
 	}
 
-	/* Validate SID assignment */
-	entry = smmu_v2_lookup_sid(sid);
-	if (!entry || !entry->active) {
-		/* SID not assigned to any domain - security violation */
-		HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to use unassigned SID %u\n",
-			client->name, client->client_id, sid);
-		return -EPERM;
-	}
-
-	if (entry->client_id != client->client_id) {
-		/* SID assigned to different client - security violation */
-		HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to steal SID %u from client ID 0x%x\n",
-			client->name, client->client_id, sid, entry->client_id);
+	/* Validate that this client is authorized to use this SID */
+	if (mc_validate_sid_for_client(client->client_id, sid)) {
+		/* SID not assigned to this client - security violation */
+		entry = smmu_v2_lookup_sid(sid);
+		if (!entry || !entry->active) {
+			HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to use unassigned SID %u\n",
+				client->name, client->client_id, sid);
+		} else {
+			HYP_ERR("MC: Client '%s' (ID 0x%x) attempted to steal SID %u\n",
+				client->name, client->client_id, sid);
+		}
 		return -EPERM;
 	}
 
@@ -403,6 +405,7 @@ bool mc_mmio_handler(u64 addr, bool is_write, u64 *val)
 int mc_register_sid_mapping(u32 client_id, u32 sid)
 {
 	struct sid_assignment *entry;
+	int i;
 
 	/* Validate SID range */
 	if (sid >= ARM_SMMU_MAX_SIDS) {
@@ -413,25 +416,36 @@ int mc_register_sid_mapping(u32 client_id, u32 sid)
 	entry = &sid_map[sid];
 
 	/*
-	 * Check if already assigned to a different client.
-	 * Allow re-registration of the same client_id→sid mapping
-	 * (idempotent operation for resume path).
+	 * Check if this client is already registered for this SID (idempotent).
+	 * Multiple clients can share the same SID (e.g., read/write pairs).
 	 */
-	if (entry->active && entry->client_id != client_id) {
-		HYP_ERR("MC: SID %u conflict: already assigned to client 0x%x",
-			sid, entry->client_id);
-		return -EBUSY;
+	for (i = 0; i < entry->num_clients; i++) {
+		if (entry->client_ids[i] == client_id) {
+			/* Already registered - idempotent operation */
+			HYP_INFO("MC: Client 0x%x already registered for SID %u",
+				 client_id, sid);
+			return 0;
+		}
 	}
 
-	/*
-	 * Record the mapping. Note that domain_id, cb_idx, and smmu_id
-	 * are populated later during device attachment (smmu_v2_attach_dev).
-	 */
+	/* Add new client to the list */
+	if (entry->num_clients >= MAX_CLIENTS_PER_SID) {
+		HYP_ERR("MC: SID %u client limit exceeded (%u clients)",
+			sid, MAX_CLIENTS_PER_SID);
+		return -ENOSPC;
+	}
+
+	entry->client_ids[entry->num_clients++] = client_id;
 	entry->sid = sid;
-	entry->client_id = client_id;
 	entry->active = true;
 
-	HYP_INFO("MC: Registered client 0x%x → SID %u", client_id, sid);
+	/*
+	 * Note: domain_id, cb_idx, and smmu_id are populated later
+	 * during device attachment (smmu_v2_attach_dev).
+	 */
+
+	HYP_INFO("MC: Registered client 0x%x → SID %u (%u clients total)",
+		 client_id, sid, entry->num_clients);
 	return 0;
 }
 

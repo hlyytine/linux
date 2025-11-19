@@ -73,10 +73,16 @@ struct arm_smmu_s2cr {
 /*
  * SID Assignment Tracking
  * Maps Stream IDs to domains for MC validation
+ *
+ * Multiple MC clients can share the same Stream ID (e.g., read/write pairs
+ * like apedmar/apedmaw). We track up to MAX_CLIENTS_PER_SID clients per SID.
  */
+#define MAX_CLIENTS_PER_SID	8
+
 struct sid_assignment {
 	u32			sid;		/* Stream ID (0-255) */
-	u32			client_id;	/* TEGRA234_MEMORY_CLIENT_* */
+	u32			client_ids[MAX_CLIENTS_PER_SID];  /* MC client IDs sharing this SID */
+	u8			num_clients;	/* Number of active clients (0-8) */
 	pkvm_handle_t		domain_id;	/* Owning domain */
 	u8			cb_idx;		/* Context bank index */
 	u8			smmu_id;	/* Which SMMU instance (0-2) */
