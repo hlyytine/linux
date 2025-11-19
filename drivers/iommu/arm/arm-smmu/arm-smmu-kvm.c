@@ -32,65 +32,11 @@
 #include <asm/kvm_pkvm.h>
 #include <asm/kvm_hyp.h>
 
-/*
- * Minimal structures for EL1 driver
- * (Full EL2 structures in pkvm/arm-smmu-v2.h use EL2-only types)
- */
+/* Shared EL1/EL2 data structures */
+#include "pkvm/arm-smmu-v2-shared.h"
 
 /* Feature flags */
 #define ARM_SMMU_FEAT_COHERENT_WALK	BIT(3)
-
-/*
- * Forward declarations - actual definitions in pkvm/arm-smmu-v2.h
- * We don't include that header because it uses EL2-only types.
- */
-struct arm_smmu_smr;
-struct arm_smmu_s2cr;
-struct smmu_v2_cb_state;
-
-/*
- * SMMU device structure for EL1/EL2 communication.
- * CRITICAL: Layout must match struct hyp_arm_smmu_v2_device in pkvm/arm-smmu-v2.h exactly.
- *
- * To verify: sizeof(struct hyp_arm_smmu_v2_device) must be the same in both EL1 and EL2.
- */
-struct hyp_arm_smmu_v2_device {
-	/* Hardware configuration (first 60 bytes) */
-	u32			id;
-	phys_addr_t		mmio_addr;
-	void __iomem		*base;
-	phys_addr_t		mmio_addr_sec;
-	void __iomem		*base_sec;
-	bool			has_secondary_base;
-	size_t			mmio_size;
-
-	/* SMMU capabilities (next 28 bytes) */
-	u32			features;
-	u32			num_mapping_groups;
-	u32			num_context_banks;
-	u32			num_s2_context_banks;
-	u8			pgshift;
-	unsigned long		pgsize_bitmap;
-	u8			ias;
-	u8			oas;
-	u16			vmid_bits;
-
-	/* Context bank bitmap (16 bytes for 128 bits) */
-	unsigned long		context_map[2];
-
-	/* Context bank state array (128 * 56 bytes = 7168 bytes) */
-	u8			_cb_state_reserved[7168];
-
-	/* Shadow arrays (32 bytes - 4 pointers) */
-	struct arm_smmu_smr	*smrs_shadow;
-	struct arm_smmu_s2cr	*s2crs_shadow;
-	struct arm_smmu_smr	*smrs_hw;
-	struct arm_smmu_s2cr	*s2crs_hw;
-
-	/* Lock and MC pointer - EL2 uses these, EL1 doesn't access but must reserve space */
-	u32			_lock_reserved;   /* hyp_spinlock_t is u32 */
-	void			*_mc_reserved;    /* struct hyp_tegra_mc * */
-};
 
 /* External EL2 symbols */
 extern struct kvm_iommu_ops kvm_nvhe_sym(smmu_v2_ops);

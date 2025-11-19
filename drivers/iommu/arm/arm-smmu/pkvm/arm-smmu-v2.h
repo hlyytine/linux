@@ -21,14 +21,11 @@
 #include <asm/kvm_pkvm.h>
 #endif
 
+/* Shared EL1/EL2 data structures */
+#include "arm-smmu-v2-shared.h"
+
 /* Maximum number of SMMU instances on Tegra234 */
 #define ARM_SMMU_MAX_INSTANCES		3
-
-/* Maximum stream IDs (8-bit field) */
-#define ARM_SMMU_MAX_SIDS		256
-
-/* Maximum context banks */
-#define ARM_SMMU_MAX_CBS		128
 
 /* Maximum stream mapping groups */
 #define ARM_SMMU_MAX_SMRS		128
@@ -74,23 +71,6 @@ struct arm_smmu_s2cr {
 };
 
 /*
- * Context Bank State
- * Tracks per-CB configuration for protected domains
- */
-struct smmu_v2_cb_state {
-	pkvm_handle_t		domain_id;	/* Owning domain */
-	u32			cbar;		/* Context Bank Attribute Register */
-	u32			tcr;		/* Translation Control Register (S1) */
-	u32			vtcr;		/* VTCR (S2) */
-	u64			ttbr0_s2;	/* EL2's stage-2 PT base */
-	u64			ttbr1_s1;	/* Host's stage-1 PT base (shadow) */
-	u32			sctlr;		/* System Control Register */
-	u32			mair[2];	/* Memory Attribute Indirection */
-	u16			vmid;		/* Virtual Machine ID */
-	bool			active;		/* Is this CB in use? */
-};
-
-/*
  * SID Assignment Tracking
  * Maps Stream IDs to domains for MC validation
  */
@@ -114,48 +94,9 @@ struct smmu_v2_domain {
 };
 
 /*
- * pKVM SMMUv2 Device
- * Represents one SMMU instance at EL2
+ * Note: struct hyp_arm_smmu_v2_device is now defined in arm-smmu-v2-shared.h
+ * to ensure EL1/EL2 compatibility.
  */
-struct hyp_arm_smmu_v2_device {
-	/* Hardware configuration */
-	u32			id;		/* SMMU instance ID (0-2) */
-	phys_addr_t		mmio_addr;	/* Primary register base */
-	void __iomem		*base;		/* Mapped primary base */
-	phys_addr_t		mmio_addr_sec;	/* Secondary register base (niso0/1) */
-	void __iomem		*base_sec;	/* Mapped secondary base */
-	bool			has_secondary_base;
-	size_t			mmio_size;
-
-	/* SMMU capabilities (from IDR registers) */
-	u32			features;	/* Feature flags */
-	u32			num_mapping_groups;
-	u32			num_context_banks;
-	u32			num_s2_context_banks;
-	u8			pgshift;	/* Page size shift */
-	unsigned long		pgsize_bitmap;
-	u8			ias;		/* Input address size (bits) */
-	u8			oas;		/* Output address size (bits) */
-	u16			vmid_bits;
-
-	/* Context bank management */
-	DECLARE_BITMAP(context_map, ARM_SMMU_MAX_CBS);
-	struct smmu_v2_cb_state	cb_state[ARM_SMMU_MAX_CBS];
-
-	/* Shadow stream mapping state (what host thinks hardware has) */
-	struct arm_smmu_smr	*smrs_shadow;
-	struct arm_smmu_s2cr	*s2crs_shadow;
-
-	/* Actual hardware state (what EL2 programmed) */
-	struct arm_smmu_smr	*smrs_hw;
-	struct arm_smmu_s2cr	*s2crs_hw;
-
-	/* Lock for concurrent access (if needed) */
-	hyp_spinlock_t		lock;
-
-	/* Memory Controller reference (for SID validation) */
-	struct hyp_tegra_mc	*mc;
-};
 
 /*
  * Tegra Memory Controller (MC) Integration
