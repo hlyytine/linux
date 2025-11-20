@@ -304,8 +304,9 @@ static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
 
 	/*
 	 * Parse "iommus" property to find the SMMU.
-	 * Note: Stream ID population is handled by of_xlate callback,
-	 * which runs automatically during device configuration.
+	 * Note: Stream ID population is handled by MC enumeration for devices with
+	 * "interconnects" property. For devices without "interconnects" (e.g., GPCDMA),
+	 * we populate fwspec here.
 	 */
 	ret = of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
 					  0, &args);
@@ -316,9 +317,9 @@ static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
 
 	/* Find the platform device for this SMMU */
 	smmu_pdev = of_find_device_by_node(args.np);
-	of_node_put(args.np);
 
 	if (!smmu_pdev) {
+		of_node_put(args.np);
 		dev_err(dev, "SMMU device not found\n");
 		return ERR_PTR(-ENODEV);
 	}
@@ -327,6 +328,7 @@ static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
 	platform_device_put(smmu_pdev);
 
 	if (!smmu) {
+		of_node_put(args.np);
 		dev_err(dev, "SMMU driver data not set\n");
 		return ERR_PTR(-EPROBE_DEFER);
 	}
@@ -334,6 +336,48 @@ static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
 	/* Store SMMU reference in device's IOMMU private data */
 	dev_iommu_priv_set(dev, smmu);
 
+	/*
+	 * Populate fwspec with Stream ID for device drivers that query via
+	 * tegra_dev_iommu_get_stream_id().
+	 *
+	 * For devices with "interconnects" property, MC enumeration
+	 * (tegra186_mc_enumerate_sids) already populated fwspec. For devices
+	 * without "interconnects" (e.g., GPCDMA), we need to populate it here.
+	 *
+	 * De-duplicate before adding to avoid fwspec->num_ids > 1, which would
+	 * cause tegra_dev_iommu_get_stream_id() to fail.
+	 */
+	if (args.args_count > 0) {
+		u32 sid = args.args[0];
+		struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+		bool already_added = false;
+
+		/* Check if SID already exists in fwspec (added by MC enumeration) */
+		if (fwspec) {
+			int i;
+			for (i = 0; i < fwspec->num_ids; i++) {
+				if (fwspec->ids[i] == sid) {
+					already_added = true;
+					dev_dbg(dev, "SID 0x%x already in fwspec (MC enumeration)\n", sid);
+					break;
+				}
+			}
+		}
+
+		/* Add SID if not already present */
+		if (!already_added) {
+			ret = iommu_fwspec_add_ids(dev, &sid, 1);
+			if (ret) {
+				dev_warn(dev, "Failed to add SID 0x%x to fwspec: %d\n",
+					 sid, ret);
+				/* Non-fatal - device can still work without fwspec query */
+			} else {
+				dev_info(dev, "Added SID 0x%x to fwspec (non-MC device)\n", sid);
+			}
+		}
+	}
+
+	of_node_put(args.np);
 	dev_info(dev, "probed by pKVM SMMU (hyp_id=%u)\n", smmu->hyp_smmu_id);
 
 	return &smmu->iommu;
@@ -847,6 +891,93 @@ out_err:
 	return ret;
 }
 
+/**
+ * arm_smmu_kvm_enumerate_devices - Enumerate devices with direct SMMU connection
+ *
+ * Walks device tree to find devices with "iommus" but no "interconnects" property.
+ * These are non-MC devices (e.g., GPCDMA) that connect directly to SMMU.
+ * Populates fwspec early so device drivers can query stream ID during probe.
+ *
+ * Similar to tegra186_mc_enumerate_sids() but for non-MC devices.
+ */
+static void __init arm_smmu_kvm_enumerate_devices(void)
+{
+	struct device_node *np;
+	struct of_phandle_args args;
+	int ret;
+
+	/* Walk all device tree nodes */
+	for_each_node_with_property(np, "iommus") {
+		/* Skip if device has interconnects property (MC will handle it) */
+		if (of_property_read_bool(np, "interconnects"))
+			continue;
+
+		/* Parse iommus property to get Stream ID */
+		ret = of_parse_phandle_with_args(np, "iommus", "#iommu-cells", 0, &args);
+		if (ret) {
+			pr_debug("arm-smmu-kvm: Failed to parse iommus for %pOF: %d\n", np, ret);
+			continue;
+		}
+
+		/* Only handle SMMUs we own (arm,mmu-500 or nvidia,tegra234-smmu) */
+		if (!of_device_is_compatible(args.np, "arm,mmu-500") &&
+		    !of_device_is_compatible(args.np, "nvidia,tegra234-smmu")) {
+			of_node_put(args.np);
+			continue;
+		}
+
+		/* Get platform device for this node */
+		struct platform_device *pdev = of_find_device_by_node(np);
+		if (!pdev) {
+			of_node_put(args.np);
+			continue;
+		}
+
+		struct device *dev = &pdev->dev;
+
+		/* Initialize fwspec if needed */
+		ret = iommu_fwspec_init(dev, &args.np->fwnode);
+		if (ret && ret != -EEXIST) {
+			pr_warn("arm-smmu-kvm: Failed to init fwspec for %pOF: %d\n", np, ret);
+			platform_device_put(pdev);
+			of_node_put(args.np);
+			continue;
+		}
+
+		/* Add Stream ID to fwspec (with de-duplication) */
+		if (args.args_count > 0) {
+			u32 sid = args.args[0];
+			struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+			bool already_added = false;
+
+			/* Check if already added (avoid duplicates) */
+			if (fwspec) {
+				int i;
+				for (i = 0; i < fwspec->num_ids; i++) {
+					if (fwspec->ids[i] == sid) {
+						already_added = true;
+						break;
+					}
+				}
+			}
+
+			if (!already_added) {
+				ret = iommu_fwspec_add_ids(dev, &sid, 1);
+				if (ret) {
+					pr_warn("arm-smmu-kvm: Failed to add SID 0x%x for %pOF: %d\n",
+						sid, np, ret);
+				} else {
+					pr_info("arm-smmu-kvm: Added SID 0x%x to fwspec for %pOF (non-MC device)\n",
+						sid, np);
+				}
+			}
+		}
+
+		platform_device_put(pdev);
+		of_node_put(args.np);
+	}
+}
+
 /* Register early, before KVM initialization */
 subsys_initcall(kvm_arm_smmu_v2_register);
 
@@ -864,12 +995,21 @@ static int __init arm_smmu_kvm_init(void)
 
 	pr_info("arm-smmu-kvm: pKVM enabled, registering platform driver\n");
 	ret = platform_driver_register(&arm_smmu_kvm_driver);
-	if (ret)
+	if (ret) {
 		pr_err("arm-smmu-kvm: Failed to register platform driver: %d\n", ret);
-	else
-		pr_info("arm-smmu-kvm: Platform driver registered successfully\n");
+		return ret;
+	}
 
-	return ret;
+	pr_info("arm-smmu-kvm: Platform driver registered successfully\n");
+
+	/*
+	 * Enumerate devices with direct SMMU connection (no MC).
+	 * This populates fwspec early for devices like GPCDMA that need
+	 * stream ID during their probe function.
+	 */
+	arm_smmu_kvm_enumerate_devices();
+
+	return 0;
 }
 /*
  * Register at subsys_initcall_sync level (very early, before device probing) to
