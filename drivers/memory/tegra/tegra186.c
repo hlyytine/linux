@@ -64,6 +64,8 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 
 	/* Walk all device tree nodes with "iommus" property */
 	for_each_node_with_property(np, "iommus") {
+		struct device_node *iommu_np;
+
 		/* Skip if no interconnects property (not an MC client) */
 		if (!of_find_property(np, "interconnects", NULL))
 			continue;
@@ -77,9 +79,9 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 			continue;
 		}
 
-		/* Stream ID is first argument */
+		/* Stream ID is first argument, save SMMU node for fwspec init */
 		sid = iommu_args.args[0];
-		of_node_put(iommu_args.np);
+		iommu_np = iommu_args.np;
 
 		/* Parse interconnects property to find MC client IDs */
 		i = 0;
@@ -95,6 +97,8 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 			     client++) {
 				if (client->id == client_id) {
 					struct arm_smccc_res res;
+					struct device *dev;
+					struct platform_device *pdev;
 
 					dev_info(mc->dev,
 						 "MC: Device %pOF: client %s (0x%x) → SID 0x%x\n",
@@ -110,12 +114,76 @@ static int tegra186_mc_enumerate_sids(struct tegra_mc *mc)
 							err);
 						return err;
 					}
+
+					/*
+					 * Populate iommu_fwspec for device drivers that query
+					 * their Stream ID via tegra_dev_iommu_get_stream_id().
+					 * We do this during early MC enumeration (arch_initcall)
+					 * so fwspec is ready before device probe.
+					 */
+					pdev = of_find_device_by_node(np);
+					if (pdev) {
+						dev = &pdev->dev;
+
+						/* Initialize fwspec if not already done */
+						err = iommu_fwspec_init(dev, &iommu_np->fwnode);
+						if (err && err != -EEXIST) {
+							dev_warn(mc->dev,
+								 "MC: Failed to init fwspec for %pOF: %d\n",
+								 np, err);
+						} else {
+							struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
+							bool already_added = false;
+							int j;
+
+							/*
+							 * Check if SID already exists (avoid duplicates).
+							 * Multiple MC clients (read/write) can share the same SID.
+							 */
+							if (fwspec) {
+								for (j = 0; j < fwspec->num_ids; j++) {
+									if (fwspec->ids[j] == sid) {
+										already_added = true;
+										break;
+									}
+								}
+							}
+
+							if (!already_added) {
+								/* Add Stream ID to fwspec */
+								err = iommu_fwspec_add_ids(dev, &sid, 1);
+								if (err) {
+									dev_warn(mc->dev,
+										 "MC: Failed to add SID to fwspec for %pOF: %d\n",
+										 np, err);
+								} else {
+									dev_info(mc->dev,
+										 "MC: Added SID 0x%x to fwspec for %pOF\n",
+										 sid, np);
+								}
+							} else {
+								dev_dbg(mc->dev,
+									"MC: SID 0x%x already in fwspec for %pOF (shared by multiple clients)\n",
+									sid, np);
+							}
+						}
+
+						platform_device_put(pdev);
+					} else {
+						dev_dbg(mc->dev,
+							"MC: Device not found for %pOF (will populate fwspec later)\n",
+							np);
+					}
+
 					break;
 				}
 			}
 
 			i++;
 		}
+
+		/* Release SMMU device node reference */
+		of_node_put(iommu_np);
 	}
 
 	dev_info(mc->dev, "MC: Stream ID enumeration complete\n");
