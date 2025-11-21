@@ -1,41 +1,32 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * ARM SMMUv2 EL1 Stub Driver for pKVM (Tegra234)
+ * pKVM host stub for ARM SMMUv2 (Tegra234)
  *
  * Copyright (C) 2025 Hannu Lyytinen <hannu.lyytinen@unikie.com>
  *
- * This is a minimal EL1 driver that coordinates with the EL2 SMMUv2
- * hypervisor driver. It donates memory to EL2, issues hypercalls for
- * IOMMU operations, and integrates with the Linux IOMMU framework.
+ * This is a minimal EL1 stub that registers SMMU device information with
+ * the EL2 hypervisor. It does NOT register as a platform driver or IOMMU
+ * driver - the standard arm-smmu.c driver handles all IOMMU operations.
+ *
+ * EL2 traps all SMMU MMIO accesses and adds Stage-2 identity mapping on
+ * top of the Stage-1 translations managed by the standard driver.
+ *
+ * Architecture (following SMMUv3 pKVM pattern from linux2):
+ *   - This stub: core_initcall, allocates SMMU array, registers with EL2
+ *   - Standard arm-smmu.c: platform driver, IOMMU ops, Stage-1 management
+ *   - EL2 pkvm/arm-smmu-v2.c: MMIO trapping, Stage-2 identity mapping
  */
 
-#include <linux/device.h>
-#include <linux/dma-mapping.h>
-#include <linux/err.h>
-#include <linux/interrupt.h>
-#include <linux/io.h>
-#include <linux/iommu.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
-#include <linux/of_device.h>
-#include <linux/of_iommu.h>
-#include <linux/of_platform.h>
-#include <linux/pci.h>
-#include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
-#include <linux/slab.h>
-#include <linux/amba/bus.h>
 
-#include <linux/kvm_host.h>
 #include <asm/kvm_mmu.h>
 #include <asm/kvm_pkvm.h>
-#include <asm/kvm_hyp.h>
 
-/* Shared EL1/EL2 data structures */
 #include "pkvm/arm-smmu-v2-shared.h"
 
-/* Feature flags */
+/* Feature flags - must match pkvm/arm-smmu-v2.h */
 #define ARM_SMMU_FEAT_COHERENT_WALK	BIT(3)
 
 /* External EL2 symbols */
@@ -45,739 +36,39 @@ extern struct hyp_arm_smmu_v2_device *kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_smmus);
 extern size_t kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count);
 #define kvm_hyp_arm_smmu_v2_count kvm_nvhe_sym(kvm_hyp_arm_smmu_v2_count)
 
-#ifdef MODULE
-static unsigned long pkvm_module_token;
+/* Tegra234 SMMU compatible strings */
+static const char * const tegra234_smmu_compat[] = {
+	"nvidia,tegra234-smmu",
+	"arm,mmu-500",
+	NULL
+};
 
-#define ksym_ref_addr_nvhe(x) \
-	((typeof(kvm_nvhe_sym(x)) *)(pkvm_el2_mod_va(&kvm_nvhe_sym(x), pkvm_module_token)))
-
-int kvm_nvhe_sym(smmu_v2_init_hyp_module)(const struct pkvm_module_ops *ops);
-#else
-#define ksym_ref_addr_nvhe(x) \
-	((typeof(kvm_nvhe_sym(x)) *)(kern_hyp_va(lm_alias(&kvm_nvhe_sym(x)))))
-#endif
-
-/* Global SMMU array for EL2 */
 static size_t kvm_arm_smmu_v2_count;
 static struct hyp_arm_smmu_v2_device *kvm_arm_smmu_v2_array;
 
+#define ksym_ref_addr_nvhe(x) \
+	((typeof(kvm_nvhe_sym(x)) *)(kern_hyp_va(lm_alias(&kvm_nvhe_sym(x)))))
+
 /*
- * Two-phase initialization support:
- * Pre-allocated arm_smmu_kvm_device structures for early IOMMU registration.
- * These are allocated and registered in arch_initcall, then completed in probe.
+ * Calculate number of pages needed for SMMU page tables.
+ * Use host stage-2 page count plus extra for context banks.
  */
-#define MAX_SMMU_INSTANCES 3
-static struct arm_smmu_kvm_device *early_smmu_devices[MAX_SMMU_INSTANCES];
-static int early_smmu_count;
+static size_t smmu_v2_hyp_pgt_pages(void)
+{
+	return host_s2_pgtable_pages() + 500;
+}
 
-/* Forward declarations */
-struct arm_smmu_kvm_device;
-struct arm_smmu_kvm_domain;
-
-/**
- * struct arm_smmu_kvm_device - EL1 SMMU device state
- * @dev: Linux device pointer
- * @iommu: IOMMU device for framework registration
- * @hyp_smmu_id: Hypervisor SMMU instance ID (0-2 for Tegra234)
- * @base: MMIO base address (donated to EL2, no longer accessible at EL1)
- * @size: MMIO region size
- * @num_context_banks: Number of context banks
- * @num_mapping_groups: Number of stream mapping groups
+/*
+ * EL2 initialization callback - called by pKVM framework
  */
-struct arm_smmu_kvm_device {
-	struct device			*dev;
-	struct iommu_device		iommu;
-	u32				hyp_smmu_id;
-	phys_addr_t			base;
-	resource_size_t			size;
-	u32				num_context_banks;
-	u32				num_mapping_groups;
+static int kvm_arm_smmu_v2_init(void)
+{
+	return kvm_iommu_init_hyp(ksym_ref_addr_nvhe(smmu_v2_ops));
+}
 
-	/* Memory donated to EL2 */
-	void				*donated_mem;
-	size_t				donated_mem_size;
+static struct kvm_iommu_driver kvm_smmu_v2_driver = {
+	.init_driver = kvm_arm_smmu_v2_init,
 };
-
-/**
- * struct arm_smmu_kvm_domain - EL1 IOMMU domain state
- * @domain: Linux IOMMU domain
- * @smmu: Owning SMMU device
- * @hyp_domain_id: Hypervisor domain handle
- */
-struct arm_smmu_kvm_domain {
-	struct iommu_domain		domain;
-	struct arm_smmu_kvm_device	*smmu;
-	u32				hyp_domain_id;
-};
-
-/* Convert Linux domain to KVM domain */
-static inline struct arm_smmu_kvm_domain *
-to_arm_smmu_kvm_domain(struct iommu_domain *dom)
-{
-	return container_of(dom, struct arm_smmu_kvm_domain, domain);
-}
-
-/*
- * Hypercall Wrappers
- *
- * These use the exported kvm_iommu_* functions from arch/arm64/kvm/iommu.c
- * which handle the actual hypercalls to EL2.
- */
-
-/* Global domain ID counter for allocation */
-static atomic_t next_domain_id = ATOMIC_INIT(1);
-
-/**
- * arm_smmu_kvm_alloc_domain_id - Allocate a new domain ID
- *
- * Domain IDs must be unique across all IOMMUs. We use a simple atomic
- * counter for allocation.
- *
- * Returns: New domain ID (>0), or negative error code
- */
-static pkvm_handle_t arm_smmu_kvm_alloc_domain_id(void)
-{
-	return atomic_inc_return(&next_domain_id);
-}
-
-/**
- * arm_smmu_kvm_get_stream_id - Get Stream ID for a device
- * @dev: Device to get Stream ID for
- *
- * Parses the device tree "iommus" property to extract the Stream ID.
- * For Tegra234, the format is: iommus = <&smmu STREAM_ID>;
- *
- * Returns: Stream ID (0-255), or negative error code
- */
-static int arm_smmu_kvm_get_stream_id(struct device *dev)
-{
-	struct of_phandle_args args;
-	int ret;
-
-	ret = of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
-					  0, &args);
-	if (ret) {
-		dev_err(dev, "failed to parse iommus property: %d\n", ret);
-		return ret;
-	}
-
-	/*
-	 * For ARM SMMUs, args.args[0] is the Stream ID
-	 * Tegra234 uses 8-bit Stream IDs (0-255)
-	 */
-	if (args.args_count < 1) {
-		dev_err(dev, "iommus property has no Stream ID\n");
-		of_node_put(args.np);
-		return -EINVAL;
-	}
-
-	if (args.args[0] > 255) {
-		dev_err(dev, "invalid Stream ID %u (max 255)\n", args.args[0]);
-		of_node_put(args.np);
-		return -EINVAL;
-	}
-
-	of_node_put(args.np);
-
-	return args.args[0];
-}
-
-/*
- * IOMMU Domain Operations
- */
-
-static struct iommu_domain *arm_smmu_kvm_domain_alloc(struct device *dev)
-{
-	struct arm_smmu_kvm_domain *smmu_domain;
-	struct arm_smmu_kvm_device *smmu;
-	int ret;
-
-	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
-	if (!smmu_domain)
-		return NULL;
-
-	/*
-	 * Initialize domain with Tegra234's supported page size.
-	 * Only 4K pages are supported due to walk cache erratum.
-	 */
-	smmu_domain->domain.pgsize_bitmap = SZ_4K;
-
-	/*
-	 * Allocate domain at EL2 now, not in attach_dev.
-	 * The IOMMU DMA layer may call map_pages before attach_dev,
-	 * so the domain must be fully initialized before returning.
-	 */
-	smmu = dev_iommu_priv_get(dev);
-	if (!smmu) {
-		dev_err(dev, "device not associated with SMMU\n");
-		kfree(smmu_domain);
-		return NULL;
-	}
-
-	smmu_domain->smmu = smmu;
-	smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
-
-	ret = kvm_iommu_alloc_domain(smmu->hyp_smmu_id,
-				     smmu_domain->hyp_domain_id,
-				     IOMMU_DOMAIN_DMA);
-	if (ret) {
-		dev_err(dev, "failed to allocate EL2 domain: %d\n", ret);
-		kfree(smmu_domain);
-		return NULL;
-	}
-
-	return &smmu_domain->domain;
-}
-
-static void arm_smmu_kvm_domain_free(struct iommu_domain *domain)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-
-	if (smmu_domain->hyp_domain_id) {
-		kvm_iommu_free_domain(smmu_domain->hyp_domain_id);
-		smmu_domain->hyp_domain_id = 0;
-	}
-
-	kfree(smmu_domain);
-}
-
-static int arm_smmu_kvm_attach_dev(struct iommu_domain *domain,
-				   struct device *dev)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-	struct arm_smmu_kvm_device *smmu = dev_iommu_priv_get(dev);
-	int sid;
-	int ret;
-
-	if (!smmu) {
-		dev_err(dev, "device not associated with SMMU\n");
-		return -ENODEV;
-	}
-
-	/* Domain should already be allocated in domain_alloc_paging */
-	if (!smmu_domain->hyp_domain_id) {
-		dev_err(dev, "domain not allocated at EL2\n");
-		return -EINVAL;
-	}
-
-	/* Get Stream ID from device tree */
-	sid = arm_smmu_kvm_get_stream_id(dev);
-	if (sid < 0)
-		return sid;
-
-	/* Attach device to domain at EL2 */
-	ret = kvm_iommu_attach_dev(smmu->hyp_smmu_id, smmu_domain->hyp_domain_id,
-				   sid, 0 /* pasid */, 0 /* pasid_bits */, 0 /* flags */);
-	if (ret) {
-		dev_err(dev, "failed to attach SID %u to domain %u: %d\n",
-			sid, smmu_domain->hyp_domain_id, ret);
-		return ret;
-	}
-
-	dev_info(dev, "attached to SMMU domain %u (SID %u)\n",
-		 smmu_domain->hyp_domain_id, sid);
-
-	return 0;
-}
-
-static int arm_smmu_kvm_map_pages(struct iommu_domain *domain,
-				  unsigned long iova, phys_addr_t paddr,
-				  size_t pgsize, size_t pgcount,
-				  int prot, gfp_t gfp, size_t *mapped)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-	size_t total_mapped = 0;
-	int ret;
-
-	if (!smmu_domain->hyp_domain_id)
-		return -EINVAL;
-
-	ret = kvm_iommu_map_pages(smmu_domain->hyp_domain_id, iova, paddr,
-				  pgsize, pgcount, prot, gfp, &total_mapped);
-
-	if (mapped)
-		*mapped = total_mapped;
-
-	return ret;
-}
-
-static size_t arm_smmu_kvm_unmap_pages(struct iommu_domain *domain,
-				       unsigned long iova, size_t pgsize,
-				       size_t pgcount,
-				       struct iommu_iotlb_gather *gather)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-
-	if (!smmu_domain->hyp_domain_id)
-		return 0;
-
-	return kvm_iommu_unmap_pages(smmu_domain->hyp_domain_id, iova,
-				     pgsize, pgcount);
-}
-
-static phys_addr_t arm_smmu_kvm_iova_to_phys(struct iommu_domain *domain,
-					     dma_addr_t iova)
-{
-	struct arm_smmu_kvm_domain *smmu_domain = to_arm_smmu_kvm_domain(domain);
-
-	if (!smmu_domain->hyp_domain_id)
-		return 0;
-
-	return kvm_iommu_iova_to_phys(smmu_domain->hyp_domain_id, iova);
-}
-
-static struct iommu_device *arm_smmu_kvm_probe_device(struct device *dev)
-{
-	struct arm_smmu_kvm_device *smmu = NULL;
-	struct of_phandle_args args;
-	struct platform_device *smmu_pdev;
-	int ret;
-
-	/*
-	 * Parse "iommus" property to find the SMMU.
-	 * Note: Stream ID population is handled by MC enumeration for devices with
-	 * "interconnects" property. For devices without "interconnects" (e.g., GPCDMA),
-	 * we populate fwspec here.
-	 */
-	ret = of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
-					  0, &args);
-	if (ret) {
-		dev_dbg(dev, "no iommus property found\n");
-		return ERR_PTR(-ENODEV);
-	}
-
-	/* Find the platform device for this SMMU */
-	smmu_pdev = of_find_device_by_node(args.np);
-
-	if (!smmu_pdev) {
-		of_node_put(args.np);
-		dev_err(dev, "SMMU device not found\n");
-		return ERR_PTR(-ENODEV);
-	}
-
-	smmu = platform_get_drvdata(smmu_pdev);
-	platform_device_put(smmu_pdev);
-
-	if (!smmu) {
-		of_node_put(args.np);
-		dev_err(dev, "SMMU driver data not set\n");
-		return ERR_PTR(-EPROBE_DEFER);
-	}
-
-	/* Store SMMU reference in device's IOMMU private data */
-	dev_iommu_priv_set(dev, smmu);
-
-	/*
-	 * Populate fwspec with Stream ID for device drivers that query via
-	 * tegra_dev_iommu_get_stream_id().
-	 *
-	 * For devices with "interconnects" property, MC enumeration
-	 * (tegra186_mc_enumerate_sids) already populated fwspec. For devices
-	 * without "interconnects" (e.g., GPCDMA), we need to populate it here.
-	 *
-	 * De-duplicate before adding to avoid fwspec->num_ids > 1, which would
-	 * cause tegra_dev_iommu_get_stream_id() to fail.
-	 */
-	if (args.args_count > 0) {
-		u32 sid = args.args[0];
-		struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-		bool already_added = false;
-
-		/* Check if SID already exists in fwspec (added by MC enumeration) */
-		if (fwspec) {
-			int i;
-			for (i = 0; i < fwspec->num_ids; i++) {
-				if (fwspec->ids[i] == sid) {
-					already_added = true;
-					dev_dbg(dev, "SID 0x%x already in fwspec (MC enumeration)\n", sid);
-					break;
-				}
-			}
-		}
-
-		/* Add SID if not already present */
-		if (!already_added) {
-			ret = iommu_fwspec_add_ids(dev, &sid, 1);
-			if (ret) {
-				dev_warn(dev, "Failed to add SID 0x%x to fwspec: %d\n",
-					 sid, ret);
-				/* Non-fatal - device can still work without fwspec query */
-			} else {
-				dev_info(dev, "Added SID 0x%x to fwspec (non-MC device)\n", sid);
-			}
-		}
-	}
-
-	of_node_put(args.np);
-	dev_info(dev, "probed by pKVM SMMU (hyp_id=%u)\n", smmu->hyp_smmu_id);
-
-	return &smmu->iommu;
-}
-
-static void arm_smmu_kvm_release_device(struct device *dev)
-{
-	dev_iommu_priv_set(dev, NULL);
-}
-
-/*
- * of_xlate callback: Translate device tree "iommus" property to Stream ID
- *
- * This callback is called by the IOMMU framework when parsing device tree
- * for devices with "iommus" property. It extracts the Stream ID from the
- * device tree and adds it to the device's iommu_fwspec.
- *
- * Note: IOMMU devices are registered in arm_smmu_kvm_device_probe() before
- * device probing begins (subsys_initcall_sync level), so the IOMMU framework
- * is ready when devices start probing.
- */
-static int arm_smmu_kvm_of_xlate(struct device *dev, const struct of_phandle_args *args)
-{
-	u32 sid;
-
-	if (args->args_count < 1) {
-		dev_err(dev, "of_xlate: missing Stream ID in iommus property\n");
-		return -EINVAL;
-	}
-
-	sid = args->args[0];
-
-	if (sid > 255) {
-		dev_err(dev, "of_xlate: invalid Stream ID 0x%x (max 255)\n", sid);
-		return -EINVAL;
-	}
-
-	dev_info(dev, "of_xlate: Adding SID 0x%x to fwspec\n", sid);
-
-	return iommu_fwspec_add_ids(dev, &sid, 1);
-}
-
-static const struct iommu_ops arm_smmu_kvm_ops = {
-	.domain_alloc_paging	= arm_smmu_kvm_domain_alloc,
-	.probe_device		= arm_smmu_kvm_probe_device,
-	.release_device		= arm_smmu_kvm_release_device,
-	.device_group		= generic_device_group,
-	.of_xlate		= arm_smmu_kvm_of_xlate,
-	.owner			= THIS_MODULE,
-	.default_domain_ops = &(const struct iommu_domain_ops) {
-		.attach_dev	= arm_smmu_kvm_attach_dev,
-		.map_pages	= arm_smmu_kvm_map_pages,
-		.unmap_pages	= arm_smmu_kvm_unmap_pages,
-		.iova_to_phys	= arm_smmu_kvm_iova_to_phys,
-		.free		= arm_smmu_kvm_domain_free,
-	}
-};
-
-/*
- * Two-Phase Initialization
- *
- * The IOMMU framework requires ops to be registered BEFORE client devices
- * are parsed from device tree. Since our platform driver probe runs too late
- * (after device tree parsing), we need early initialization to register ops.
- *
- * Phase 1 (arch_initcall): Walk DT, allocate REAL arm_smmu_kvm_device structs,
- *                          register with IOMMU framework so of_xlate is available
- * Phase 2 (platform probe): Find pre-allocated device, link to platform device
- */
-
-/**
- * arm_smmu_kvm_base_to_id - Convert MMIO base to SMMU instance ID
- * @base: MMIO base address
- *
- * Returns: SMMU instance ID (0-2), or -EINVAL
- */
-static int arm_smmu_kvm_base_to_id(phys_addr_t base)
-{
-	if (base == 0x8000000 || base == 0x7000000)
-		return 0;  /* smmu_niso1 */
-	else if (base == 0x10000000)
-		return 1;  /* smmu_iso */
-	else if (base == 0x12000000 || base == 0x11000000)
-		return 2;  /* smmu_niso0 */
-	return -EINVAL;
-}
-
-/**
- * arm_smmu_kvm_early_init - Early initialization for IOMMU framework registration
- *
- * Walks device tree to find SMMU nodes, allocates device structures, and
- * registers with IOMMU framework. This runs at arch_initcall level to ensure
- * of_xlate callback is available before client devices are parsed.
- *
- * Returns: 0 on success, negative error code on failure
- */
-static int __init arm_smmu_kvm_early_init(void)
-{
-	struct device_node *np;
-	struct arm_smmu_kvm_device *smmu;
-	struct resource res;
-	int ret, id;
-
-	if (!is_protected_kvm_enabled()) {
-		pr_debug("arm-smmu-kvm: pKVM not enabled, skipping early init\n");
-		return 0;
-	}
-
-	pr_info("arm-smmu-kvm: Early init - scanning for SMMU devices\n");
-
-	/* Walk device tree for all SMMU nodes */
-	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu") {
-		/* Get MMIO base address from reg property */
-		ret = of_address_to_resource(np, 0, &res);
-		if (ret) {
-			pr_warn("arm-smmu-kvm: Failed to get resources for %pOF: %d\n",
-				np, ret);
-			continue;
-		}
-
-		/* Convert MMIO base to SMMU instance ID */
-		id = arm_smmu_kvm_base_to_id(res.start);
-		if (id < 0) {
-			pr_warn("arm-smmu-kvm: Unknown SMMU base 0x%llx for %pOF\n",
-				(u64)res.start, np);
-			continue;
-		}
-
-		/* Allocate REAL device structure (not devm - we manage lifecycle) */
-		smmu = kzalloc(sizeof(*smmu), GFP_KERNEL);
-		if (!smmu) {
-			pr_err("arm-smmu-kvm: Failed to allocate device for %pOF\n", np);
-			continue;
-		}
-
-		/* Initialize device structure */
-		smmu->base = res.start;
-		smmu->size = resource_size(&res);
-		smmu->hyp_smmu_id = id;
-		smmu->num_context_banks = 64;   /* Tegra234 hardcoded */
-		smmu->num_mapping_groups = 128; /* Tegra234 hardcoded */
-		/* smmu->dev will be set by platform probe later */
-
-		/*
-		 * Set fwnode to allow IOMMU framework to match client devices.
-		 * This is critical - without it, of_iommu_configure() cannot
-		 * find our IOMMU when parsing client device's iommus property.
-		 */
-		smmu->iommu.fwnode = of_fwnode_handle(np);
-
-		/* Register with IOMMU framework using DT node's fwnode */
-		ret = iommu_device_sysfs_add(&smmu->iommu, NULL, NULL,
-					     "smmu-kvm.%d", id);
-		if (ret) {
-			pr_err("arm-smmu-kvm: Failed to add sysfs for %pOF: %d\n",
-			       np, ret);
-			kfree(smmu);
-			continue;
-		}
-
-		/*
-		 * Register with IOMMU framework using DT node as fwnode.
-		 * This makes of_xlate available for client devices.
-		 * The fwnode was set above to enable device matching.
-		 */
-		ret = iommu_device_register(&smmu->iommu, &arm_smmu_kvm_ops,
-					    NULL);
-		if (ret) {
-			pr_err("arm-smmu-kvm: Failed to register IOMMU for %pOF: %d\n",
-			       np, ret);
-			iommu_device_sysfs_remove(&smmu->iommu);
-			kfree(smmu);
-			continue;
-		}
-
-		/* Store in early device array */
-		if (early_smmu_count < MAX_SMMU_INSTANCES) {
-			early_smmu_devices[early_smmu_count++] = smmu;
-			pr_info("arm-smmu-kvm: Early init SMMU %d at 0x%llx (node %pOF)\n",
-				id, (u64)res.start, np);
-		} else {
-			pr_err("arm-smmu-kvm: Too many SMMU instances\n");
-			iommu_device_unregister(&smmu->iommu);
-			iommu_device_sysfs_remove(&smmu->iommu);
-			kfree(smmu);
-		}
-	}
-
-	pr_info("arm-smmu-kvm: Early init complete, %d SMMU devices registered\n",
-		early_smmu_count);
-
-	return 0;
-}
-arch_initcall(arm_smmu_kvm_early_init);
-
-/*
- * Platform Driver
- */
-
-/**
- * arm_smmu_kvm_find_early_device - Find pre-allocated device by MMIO base
- * @base: MMIO base address
- *
- * Returns: Pre-allocated device, or NULL if not found
- */
-static struct arm_smmu_kvm_device *arm_smmu_kvm_find_early_device(phys_addr_t base)
-{
-	int i;
-
-	for (i = 0; i < early_smmu_count; i++) {
-		if (early_smmu_devices[i] && early_smmu_devices[i]->base == base)
-			return early_smmu_devices[i];
-	}
-	return NULL;
-}
-
-/**
- * arm_smmu_kvm_get_smmu_id - Determine SMMU instance ID from device tree
- * @pdev: Platform device
- *
- * Returns: SMMU instance ID (0-2 for Tegra234), or negative error code
- */
-static int arm_smmu_kvm_get_smmu_id(struct platform_device *pdev)
-{
-	struct resource *res;
-	int id;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res)
-		return -EINVAL;
-
-	id = arm_smmu_kvm_base_to_id(res->start);
-	if (id < 0)
-		dev_err(&pdev->dev, "unknown SMMU MMIO base 0x%llx\n",
-			(u64)res->start);
-	return id;
-}
-
-static int arm_smmu_kvm_device_probe(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
-	struct arm_smmu_kvm_device *smmu;
-	struct resource *res;
-	u32 reg;
-	int ret;
-
-	dev_info(dev, "arm-smmu-kvm: Probing device at %pR\n",
-		 platform_get_resource(pdev, IORESOURCE_MEM, 0));
-
-	/* Get MMIO resources */
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!res) {
-		dev_err(dev, "missing MMIO resource\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * Two-phase initialization: Check if SMMU was pre-allocated and
-	 * registered in early init. If so, just link to this platform device.
-	 */
-	smmu = arm_smmu_kvm_find_early_device(res->start);
-	if (smmu) {
-		dev_info(dev, "Using pre-allocated SMMU device (early init)\n");
-		smmu->dev = dev;  /* Link to platform device */
-		platform_set_drvdata(pdev, smmu);
-
-		dev_info(dev, "pKVM ARM SMMUv2 driver initialized (hyp_id=%u, base=0x%llx, early_init)\n",
-			 smmu->hyp_smmu_id, (u64)smmu->base);
-		return 0;
-	}
-
-	/* No pre-allocated device - allocate fresh (fallback path) */
-	dev_info(dev, "No pre-allocated device, allocating fresh\n");
-
-	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
-	if (!smmu)
-		return -ENOMEM;
-
-	smmu->dev = dev;
-	smmu->base = res->start;
-	smmu->size = resource_size(res);
-
-	/* Determine SMMU instance ID from base address */
-	ret = arm_smmu_kvm_get_smmu_id(pdev);
-	if (ret < 0) {
-		dev_err(dev, "failed to determine SMMU instance ID\n");
-		return ret;
-	}
-	smmu->hyp_smmu_id = ret;
-
-	/* Parse device tree for #iommu-cells (should be 1 for SMMUv2) */
-	ret = of_property_read_u32(dev->of_node, "#iommu-cells", &reg);
-	if (ret || reg != 1) {
-		dev_err(dev, "invalid or missing #iommu-cells property\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * Note: We cannot read IDR registers here because EL2 owns the
-	 * SMMU hardware. The hypervisor will probe capabilities during
-	 * initialization. We use hardcoded values based on Tegra234 spec.
-	 */
-	smmu->num_context_banks = 64;
-	smmu->num_mapping_groups = 128;
-
-	/* Initialize IOMMU device structure */
-	ret = iommu_device_sysfs_add(&smmu->iommu, dev, NULL,
-				      "smmu-kvm.%u", smmu->hyp_smmu_id);
-	if (ret) {
-		dev_err(dev, "failed to register IOMMU in sysfs: %d\n", ret);
-		return ret;
-	}
-
-	/* Set driver data before registering IOMMU device */
-	platform_set_drvdata(pdev, smmu);
-
-	/*
-	 * Register with IOMMU framework NOW (not in late_initcall).
-	 * This must happen before devices probe to avoid registration
-	 * failing when groups already have attached devices.
-	 */
-	ret = iommu_device_register(&smmu->iommu, &arm_smmu_kvm_ops, dev);
-	if (ret) {
-		dev_err(dev, "failed to register IOMMU device: %d\n", ret);
-		iommu_device_sysfs_remove(&smmu->iommu);
-		return ret;
-	}
-
-	dev_info(dev, "pKVM ARM SMMUv2 driver initialized and registered (hyp_id=%u, base=0x%llx)\n",
-		 smmu->hyp_smmu_id, (u64)smmu->base);
-
-	return 0;
-}
-
-static void arm_smmu_kvm_device_remove(struct platform_device *pdev)
-{
-	struct arm_smmu_kvm_device *smmu = platform_get_drvdata(pdev);
-
-	iommu_device_unregister(&smmu->iommu);
-	iommu_device_sysfs_remove(&smmu->iommu);
-
-	if (smmu->donated_mem)
-		free_pages((unsigned long)smmu->donated_mem,
-			   get_order(smmu->donated_mem_size));
-}
-
-static const struct of_device_id arm_smmu_kvm_of_match[] = {
-	{ .compatible = "arm,mmu-500" },
-	{ .compatible = "nvidia,tegra234-smmu" },
-	{ },
-};
-MODULE_DEVICE_TABLE(of, arm_smmu_kvm_of_match);
-
-static struct platform_driver arm_smmu_kvm_driver = {
-	.driver	= {
-		.name			= "arm-smmu-kvm",
-		.of_match_table		= arm_smmu_kvm_of_match,
-		.suppress_bind_attrs	= true,
-	},
-	.probe	= arm_smmu_kvm_device_probe,
-	.remove	= arm_smmu_kvm_device_remove,
-};
-
-/*
- * pKVM IOMMU Driver Registration
- *
- * This must run early (subsys_initcall) to register with the pKVM framework
- * before KVM initialization.
- */
 
 static void kvm_arm_smmu_v2_array_free(void)
 {
@@ -791,34 +82,34 @@ static void kvm_arm_smmu_v2_array_free(void)
 	kvm_arm_smmu_v2_array = NULL;
 }
 
-/**
- * kvm_arm_smmu_v2_array_alloc - Allocate SMMU device array for EL2
+/*
+ * Parse device tree to find all SMMUv2 instances and allocate the
+ * hyp_arm_smmu_v2_device array that will be passed to EL2.
  *
- * Parses device tree to find all SMMUv2 instances, allocates shadow
- * array structures, and populates basic MMIO information for EL2.
- *
- * Returns: 0 on success, negative error code on failure
+ * This runs at core_initcall (very early) before the standard arm-smmu.c
+ * driver probes. EL2 needs this information before any SMMU operations.
  */
 static int kvm_arm_smmu_v2_array_alloc(void)
 {
 	struct device_node *np;
 	int smmu_order;
-	int ret;
 	int i = 0;
+	int ret;
+	const char * const *compat;
 
-	pr_info("SMMUv2: kvm_arm_smmu_v2_array_alloc() called\n");
-
-	/* Count SMMU instances in device tree */
+	/* Count SMMUv2 nodes */
 	kvm_arm_smmu_v2_count = 0;
-	for_each_compatible_node(np, NULL, "arm,mmu-500")
-		kvm_arm_smmu_v2_count++;
-	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu")
-		kvm_arm_smmu_v2_count++;
+	for (compat = tegra234_smmu_compat; *compat; compat++) {
+		for_each_compatible_node(np, NULL, *compat)
+			kvm_arm_smmu_v2_count++;
+	}
 
-	pr_info("SMMUv2: Found %zu SMMU instances in device tree\n", kvm_arm_smmu_v2_count);
-
-	if (!kvm_arm_smmu_v2_count)
+	if (!kvm_arm_smmu_v2_count) {
+		pr_info("arm-smmu-kvm: No SMMUv2 nodes found\n");
 		return -ENODEV;
+	}
+
+	pr_info("arm-smmu-kvm: Found %zu SMMUv2 instances\n", kvm_arm_smmu_v2_count);
 
 	/* Allocate array */
 	smmu_order = get_order(kvm_arm_smmu_v2_count * sizeof(*kvm_arm_smmu_v2_array));
@@ -826,216 +117,96 @@ static int kvm_arm_smmu_v2_array_alloc(void)
 	if (!kvm_arm_smmu_v2_array)
 		return -ENOMEM;
 
-	/* Parse device tree and populate MMIO addresses */
-	for_each_compatible_node(np, NULL, "arm,mmu-500") {
-		struct resource res;
+	/* Parse device tree for SMMU MMIO addresses */
+	for (compat = tegra234_smmu_compat; *compat; compat++) {
+		for_each_compatible_node(np, NULL, *compat) {
+			struct resource res;
 
-		pr_info("SMMUv2: Parsing arm,mmu-500 node %s (index %d)\n", np->full_name, i);
+			if (i >= kvm_arm_smmu_v2_count)
+				break;
 
-		ret = of_address_to_resource(np, 0, &res);
-		if (ret) {
-			pr_err("SMMUv2: of_address_to_resource failed for %s: %d\n", np->full_name, ret);
-			goto out_err;
+			ret = of_address_to_resource(np, 0, &res);
+			if (ret) {
+				pr_err("arm-smmu-kvm: Failed to get resource for %pOF\n", np);
+				goto out_err;
+			}
+
+			kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
+			kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
+
+			pr_info("arm-smmu-kvm: SMMU[%d] at 0x%llx, size 0x%lx\n",
+				i, (u64)res.start, (unsigned long)resource_size(&res));
+
+			/* Check for secondary register base (Tegra234 dual-base) */
+			if (of_address_to_resource(np, 1, &res) == 0) {
+				kvm_arm_smmu_v2_array[i].mmio_addr_sec = res.start;
+				pr_info("arm-smmu-kvm: SMMU[%d] secondary at 0x%llx\n",
+					i, (u64)res.start);
+			}
+
+			/* Check for coherent DMA */
+			if (of_dma_is_coherent(np))
+				kvm_arm_smmu_v2_array[i].features |= ARM_SMMU_FEAT_COHERENT_WALK;
+
+			i++;
 		}
-
-		kvm_arm_smmu_v2_array[i].id = i;  /* SMMU instance ID */
-		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
-		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
-
-		pr_info("SMMUv2: SMMU[%d] at PA %llx, size %llx\n", i,
-			(u64)kvm_arm_smmu_v2_array[i].mmio_addr,
-			(u64)kvm_arm_smmu_v2_array[i].mmio_size);
-
-		/* Check for secondary register base (Tegra234 niso0/niso1) */
-		if (!of_address_to_resource(np, 1, &res)) {
-			kvm_arm_smmu_v2_array[i].mmio_addr_sec = res.start;
-			kvm_arm_smmu_v2_array[i].has_secondary_base = true;
-		}
-
-		if (of_dma_is_coherent(np))
-			kvm_arm_smmu_v2_array[i].features |= ARM_SMMU_FEAT_COHERENT_WALK;
-
-		i++;
 	}
-
-	for_each_compatible_node(np, NULL, "nvidia,tegra234-smmu") {
-		struct resource res;
-
-		pr_info("SMMUv2: Parsing nvidia,tegra234-smmu node %s (index %d)\n", np->full_name, i);
-
-		ret = of_address_to_resource(np, 0, &res);
-		if (ret) {
-			pr_err("SMMUv2: of_address_to_resource failed for %s: %d\n", np->full_name, ret);
-			goto out_err;
-		}
-
-		kvm_arm_smmu_v2_array[i].id = i;  /* SMMU instance ID */
-		kvm_arm_smmu_v2_array[i].mmio_addr = res.start;
-		kvm_arm_smmu_v2_array[i].mmio_size = resource_size(&res);
-
-		pr_info("SMMUv2: SMMU[%d] at PA %llx, size %llx\n", i,
-			(u64)kvm_arm_smmu_v2_array[i].mmio_addr,
-			(u64)kvm_arm_smmu_v2_array[i].mmio_size);
-
-		/* Check for secondary register base */
-		if (!of_address_to_resource(np, 1, &res)) {
-			kvm_arm_smmu_v2_array[i].mmio_addr_sec = res.start;
-			kvm_arm_smmu_v2_array[i].has_secondary_base = true;
-		}
-
-		if (of_dma_is_coherent(np))
-			kvm_arm_smmu_v2_array[i].features |= ARM_SMMU_FEAT_COHERENT_WALK;
-
-		i++;
-	}
-
-	/*
-	 * Shadow arrays will be allocated by EL2 during smmu_v2_init().
-	 * We don't allocate them here to avoid the complexity of memory donation.
-	 */
-	for (i = 0; i < kvm_arm_smmu_v2_count; i++) {
-		kvm_arm_smmu_v2_array[i].smrs_shadow = NULL;
-		kvm_arm_smmu_v2_array[i].s2crs_shadow = NULL;
-		kvm_arm_smmu_v2_array[i].smrs_hw = NULL;
-		kvm_arm_smmu_v2_array[i].s2crs_hw = NULL;
-
-		pr_info("SMMUv2: SMMU[%d] initialized (shadow arrays will be allocated by EL2)\n", i);
-	}
-
-	pr_info("SMMUv2: Successfully allocated array for %zu SMMU instances\n", kvm_arm_smmu_v2_count);
-	pr_info("SMMUv2: Array physical address: %llx\n", (u64)virt_to_phys(kvm_arm_smmu_v2_array));
 
 	return 0;
 
 out_err:
-	pr_err("SMMUv2: Array allocation failed with error %d\n", ret);
 	kvm_arm_smmu_v2_array_free();
 	return ret;
 }
 
-/**
- * smmu_v2_hyp_pgt_pages - Calculate EL2 memory pool size
+/*
+ * Register SMMUv2 driver with pKVM hypervisor.
  *
- * Returns: Number of pages needed for EL2 page table pool
- */
-static size_t smmu_v2_hyp_pgt_pages(void)
-{
-	/*
-	 * Request a fixed reasonable amount for IOMMU page tables.
-	 * For Tegra234 with 3 SMMU instances and typical GPU virtualization:
-	 * - Global identity page table: ~2000 pages (8 MB)
-	 * - Per-domain page tables: ~2000 pages (8 MB)
-	 * - Shadow structures (SMR/S2CR/CB state): ~100 pages (400 KB)
-	 * - TLB management overhead: ~100 pages (400 KB)
-	 * - Growth headroom: ~4000 pages (16 MB)
-	 * Total: 8192 pages (~32 MB)
-	 *
-	 * This is much smaller than host_s2_pgtable_pages() which includes
-	 * the entire system memory, but we only need IOMMU-mapped regions.
-	 */
-	if (of_find_compatible_node(NULL, NULL, "arm,mmu-500") ||
-	    of_find_compatible_node(NULL, NULL, "nvidia,tegra234-smmu")) {
-#ifdef MODULE
-		return 1; /* Rely on kernel command line for modules */
-#else
-		return 8192; /* Fixed 32 MB allocation */
-#endif
-	}
-	return 0;
-}
-
-/**
- * kvm_arm_smmu_v2_init - Initialize EL2 hypervisor driver
- *
- * Called by pKVM framework during KVM initialization. Triggers EL2
- * hypervisor driver initialization via hypercall.
- *
- * Returns: 0 on success, negative error code on failure
- */
-static int kvm_arm_smmu_v2_init(void)
-{
-	int ret;
-
-#ifdef MODULE
-	ret = pkvm_load_el2_module(kvm_nvhe_sym(smmu_v2_init_hyp_module),
-				   &pkvm_module_token);
-	if (ret) {
-		pr_err("Failed to load SMMUv2 IOMMU EL2 module: %d\n", ret);
-		return ret;
-	}
-#endif
-
-	/* Initialize EL2 hypervisor driver */
-	ret = kvm_iommu_init_hyp(ksym_ref_addr_nvhe(smmu_v2_ops));
-	if (ret) {
-		pr_err("Failed to initialize SMMUv2 IOMMU at EL2: %d\n", ret);
-		return ret;
-	}
-
-	pr_info("ARM SMMUv2 pKVM driver initialized at EL2\n");
-	return 0;
-}
-
-/* pKVM driver operations structure */
-struct kvm_iommu_driver kvm_smmu_v2_ops = {
-	.init_driver = kvm_arm_smmu_v2_init,
-};
-
-/**
- * kvm_arm_smmu_v2_register - Register SMMUv2 driver with pKVM framework
- *
- * This function runs early (subsys_initcall) to register the SMMUv2
- * driver with the pKVM IOMMU framework before KVM initialization.
- *
- * Returns: 0 on success, negative error code on failure
+ * This is called at core_initcall, before any platform drivers probe.
+ * The standard arm-smmu.c driver will still probe and handle all IOMMU
+ * operations - EL2 only adds Stage-2 identity mapping via MMIO trapping.
  */
 static int __init kvm_arm_smmu_v2_register(void)
 {
 	size_t nr_pages;
 	int ret;
 
-	pr_info("SMMUv2: kvm_arm_smmu_v2_register() called\n");
-
 	if (!is_protected_kvm_enabled()) {
-		pr_info("SMMUv2: pKVM not enabled, skipping registration\n");
+		pr_info("arm-smmu-kvm: pKVM not enabled, skipping\n");
 		return 0;
 	}
 
-	pr_info("SMMUv2: pKVM is enabled, proceeding with registration\n");
-
-	/* Calculate memory pool size for EL2 */
 	nr_pages = smmu_v2_hyp_pgt_pages();
-	pr_info("SMMUv2: Calculated %zu pages needed for EL2 page tables\n", nr_pages);
-	if (!nr_pages) {
-		pr_info("SMMUv2: No SMMU hardware found in device tree\n");
-		return 0; /* No SMMU hardware found */
-	}
+	if (!nr_pages)
+		return 0;
 
-	/* Allocate and populate SMMU array for EL2 */
-	pr_info("SMMUv2: Calling kvm_arm_smmu_v2_array_alloc()...\n");
 	ret = kvm_arm_smmu_v2_array_alloc();
 	if (ret) {
-		pr_err("Failed to allocate SMMUv2 array: %d\n", ret);
+		if (ret == -ENODEV)
+			return 0; /* No SMMUs, not an error */
+		pr_err("arm-smmu-kvm: Failed to allocate SMMU array: %d\n", ret);
 		return ret;
 	}
 
-	/* Register with pKVM framework */
-	ret = kvm_iommu_register_driver(&kvm_smmu_v2_ops, nr_pages);
+	/*
+	 * Register with EL2. This passes the kvm_iommu_driver to the framework
+	 * which will call init_driver() to initialize the hypervisor driver.
+	 */
+	ret = kvm_iommu_register_driver(&kvm_smmu_v2_driver, nr_pages);
 	if (ret) {
-		pr_err("Failed to register SMMUv2 driver with pKVM: %d\n", ret);
+		pr_err("arm-smmu-kvm: Failed to register with pKVM: %d\n", ret);
 		goto out_err;
 	}
 
 	/*
-	 * Store array base and count in nVHE symbols for EL2 access.
-	 * These variables are in the nVHE image and accessible by EL2.
-	 * EL2 will convert kernel VA to hyp VA using kern_hyp_va().
+	 * Pass SMMU array to EL2. These variables are stored in the nVHE
+	 * image and will be accessed by the hypervisor after KVM init.
 	 */
 	kvm_hyp_arm_smmu_v2_smmus = kvm_arm_smmu_v2_array;
 	kvm_hyp_arm_smmu_v2_count = kvm_arm_smmu_v2_count;
 
-	pr_info("ARM SMMUv2 pKVM driver registered (%zu instances, %zu pages)\n",
-		kvm_arm_smmu_v2_count, nr_pages);
+	pr_info("arm-smmu-kvm: Registered %zu SMMUv2 instances with pKVM\n",
+		kvm_arm_smmu_v2_count);
 
 	return 0;
 
@@ -1044,68 +215,9 @@ out_err:
 	return ret;
 }
 
-/* Register early, before KVM initialization */
-subsys_initcall(kvm_arm_smmu_v2_register);
-
-static int __init arm_smmu_kvm_init(void)
-{
-	int ret;
-
-	pr_info("arm-smmu-kvm: Initializing platform driver\n");
-
-	/* Only load if running under pKVM */
-	if (!is_protected_kvm_enabled()) {
-		pr_info("arm-smmu-kvm: pKVM not enabled, skipping\n");
-		return -ENODEV;
-	}
-
-	pr_info("arm-smmu-kvm: pKVM enabled, registering platform driver\n");
-	ret = platform_driver_register(&arm_smmu_kvm_driver);
-	if (ret) {
-		pr_err("arm-smmu-kvm: Failed to register platform driver: %d\n", ret);
-		return ret;
-	}
-
-	pr_info("arm-smmu-kvm: Platform driver registered successfully\n");
-
-	/*
-	 * NOTE: We no longer need arm_smmu_kvm_enumerate_devices() here.
-	 * The of_xlate callback will be invoked automatically by the IOMMU
-	 * framework when we register IOMMU devices in late_initcall.
-	 * This avoids -EPROBE_DEFER issues from devices not yet probed.
-	 */
-
-	return 0;
-}
 /*
- * Register at subsys_initcall_sync level (very early, before device probing) to
- * ensure this driver binds to SMMU devices before the standard arm-smmu driver.
- * Both drivers have the same compatible string ("nvidia,tegra234-smmu"), so
- * whichever registers first will bind to the devices.
- *
- * Init levels (earliest to latest):
- *   early_initcall -> core_initcall -> postcore_initcall ->
- *   arch_initcall -> subsys_initcall -> fs_initcall ->
- *   device_initcall -> late_initcall -> module_init
- *
- * We use subsys_initcall_sync() to register before device probing begins.
- * Stream IDs are populated in probe_device() instead of of_xlate to avoid
- * -EPROBE_DEFER issues during iommu_device_register().
+ * Use core_initcall to run before any platform drivers.
+ * This ensures EL2 has SMMU information before the standard arm-smmu.c
+ * driver probes and starts using the hardware.
  */
-subsys_initcall_sync(arm_smmu_kvm_init);
-
-static void __exit arm_smmu_kvm_exit(void)
-{
-	platform_driver_unregister(&arm_smmu_kvm_driver);
-}
-module_exit(arm_smmu_kvm_exit);
-
-/*
- * NOTE: arm_smmu_kvm_late_register() was removed.
- * IOMMU devices are now registered directly in arm_smmu_kvm_device_probe()
- * to avoid registration failure when groups already have attached devices.
- */
-
-MODULE_DESCRIPTION("ARM SMMUv2 EL1 stub driver for pKVM (Tegra234)");
-MODULE_AUTHOR("NVIDIA Corporation");
-MODULE_LICENSE("GPL");
+core_initcall(kvm_arm_smmu_v2_register);

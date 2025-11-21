@@ -2411,6 +2411,10 @@ int smmu_v2_detach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
  * Uses the global identity-mapped page table to map IOVA to physical addresses.
  * Note: For Tegra234, only 4K pages are supported due to walk cache erratum.
  *
+ * IMPORTANT: Since we use a global identity-mapped page table, many IOVAs
+ * are already mapped (IOVA=PA). If the requested mapping matches an existing
+ * identity mapping, we return success (idempotent operation).
+ *
  * Returns: 0 on success, negative error code on failure
  */
 int smmu_v2_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
@@ -2419,6 +2423,7 @@ int smmu_v2_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
 	struct smmu_v2_domain *smmu_domain = domain->priv;
 	struct io_pgtable_ops *ops;
 	size_t mapped = 0;
+	size_t size;
 	int ret;
 
 	if (!smmu_domain) {
@@ -2438,8 +2443,39 @@ int smmu_v2_map_pages(struct kvm_hyp_iommu_domain *domain, unsigned long iova,
 		return -EINVAL;
 	}
 
+	size = pgsize * pgcount;
+
+	/*
+	 * For identity-mapped page tables, check if the mapping already exists.
+	 * If IOVA == PA (identity mapping) and the region is already mapped,
+	 * this is an idempotent operation - just return success.
+	 *
+	 * This handles the case where the global identity page table was
+	 * pre-populated via host_stage2_idmap(), and DMA allocations attempt
+	 * to map the same IOVAs again.
+	 */
+	if (iova == paddr && ops->iova_to_phys) {
+		phys_addr_t existing_pa = ops->iova_to_phys(ops, iova);
+		if (existing_pa == paddr) {
+			/* Already identity-mapped with same PA - success */
+			if (total_mapped)
+				*total_mapped = size;
+			return 0;
+		}
+	}
+
 	/* Map pages using io-pgtable */
 	ret = ops->map_pages(ops, iova, paddr, pgsize, pgcount, prot, GFP_KERNEL, &mapped);
+	if (ret == -EEXIST && iova == paddr) {
+		/*
+		 * -EEXIST with identity mapping: the page table entry already
+		 * exists. Since we're doing identity mapping (IOVA=PA), this
+		 * is not an error - the mapping is already what we want.
+		 */
+		if (total_mapped)
+			*total_mapped = size;
+		return 0;
+	}
 	if (ret) {
 		HYP_ERR("SMMU: Failed to map IOVA 0x%lx → PA 0x%llx (ret=%d, mapped=%zu)\n",
 			iova, (unsigned long long)paddr, ret, mapped);
@@ -2568,6 +2604,7 @@ static void smmu_v2_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int pr
 	size_t pgsize, pgcount;
 	size_t mapped;
 	int ret;
+	static unsigned int call_count = 0;
 
 	if (!idmap_pgtable) {
 		HYP_ERR("SMMU: Global page table not initialized\n");
@@ -2580,10 +2617,20 @@ static void smmu_v2_host_stage2_idmap(phys_addr_t start, phys_addr_t end, int pr
 	pgsize = SZ_4K;
 	pgcount = size >> PAGE_SHIFT;
 
+	/* Debug: Log first few calls and errors */
+	if (call_count < 10 || prot & IOMMU_MMIO) {
+		HYP_INFO("SMMU: identity-map PA 0x%llx-0x%llx (size=%zu, prot=0x%x, call#%u)\n",
+			 (unsigned long long)start, (unsigned long long)end, size, prot, call_count);
+	}
+	call_count++;
+
 	ret = ops->map_pages(ops, start, start, pgsize, pgcount, prot, GFP_KERNEL, &mapped);
 	if (ret) {
 		HYP_ERR("SMMU: Failed to identity-map PA 0x%llx-0x%llx (ret=%d, mapped=%zu)\n",
 			(unsigned long long)start, (unsigned long long)end, ret, mapped);
+	} else if (mapped != size) {
+		HYP_WARN("SMMU: Partial identity-map PA 0x%llx-0x%llx (requested=%zu, mapped=%zu)\n",
+			 (unsigned long long)start, (unsigned long long)end, size, mapped);
 	}
 }
 
@@ -2626,19 +2673,16 @@ static bool smmu_v2_dabt_handler(struct user_pt_regs *regs, u64 esr, u64 addr)
 
 /*
  * IOMMU Operations Structure
- * Exported for EL1 registration via kvm_iommu_register_driver()
+ *
+ * NOTE: Like SMMUv3 pKVM, we only implement init, host_stage2_idmap, and
+ * dabt_handler. Per-domain page table operations (map_pages, unmap_pages,
+ * alloc_domain, etc.) are NOT implemented at EL2.
+ *
+ * The global identity-mapped page table (idmap_pgtable) is populated during
+ * host_stage2_idmap() with IOVA=PA mappings. EL2 enforces Stage-2 translation.
  */
-
 struct kvm_iommu_ops smmu_v2_ops = {
 	.init			= smmu_v2_global_init,
 	.host_stage2_idmap	= smmu_v2_host_stage2_idmap,
 	.dabt_handler		= smmu_v2_dabt_handler,
-	.alloc_domain		= smmu_v2_alloc_domain,
-	.free_domain		= smmu_v2_free_domain,
-	.attach_dev		= smmu_v2_attach_dev,
-	.detach_dev		= smmu_v2_detach_dev,
-	.map_pages		= smmu_v2_map_pages,
-	.unmap_pages		= smmu_v2_unmap_pages,
-	.iova_to_phys		= smmu_v2_iova_to_phys,
-	.iotlb_sync		= smmu_v2_iotlb_sync,
 };
