@@ -180,8 +180,6 @@ static int arm_smmu_kvm_get_stream_id(struct device *dev)
 static struct iommu_domain *arm_smmu_kvm_domain_alloc(struct device *dev)
 {
 	struct arm_smmu_kvm_domain *smmu_domain;
-	struct arm_smmu_kvm_device *smmu;
-	int ret;
 
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
@@ -194,28 +192,14 @@ static struct iommu_domain *arm_smmu_kvm_domain_alloc(struct device *dev)
 	smmu_domain->domain.pgsize_bitmap = SZ_4K;
 
 	/*
-	 * Allocate domain at EL2 now, not in attach_dev.
-	 * The IOMMU DMA layer may call map_pages before attach_dev,
-	 * so the domain must be fully initialized before returning.
+	 * EL2 domain allocation is deferred to attach_dev.
+	 * At this point, dev_iommu_priv may not be set yet (probe_device
+	 * may not have run), so we cannot get the SMMU reference.
+	 * The EL2 domain will be allocated lazily when the first device
+	 * is attached.
 	 */
-	smmu = dev_iommu_priv_get(dev);
-	if (!smmu) {
-		dev_err(dev, "device not associated with SMMU\n");
-		kfree(smmu_domain);
-		return NULL;
-	}
-
-	smmu_domain->smmu = smmu;
-	smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
-
-	ret = kvm_iommu_alloc_domain(smmu->hyp_smmu_id,
-				     smmu_domain->hyp_domain_id,
-				     IOMMU_DOMAIN_DMA);
-	if (ret) {
-		dev_err(dev, "failed to allocate EL2 domain: %d\n", ret);
-		kfree(smmu_domain);
-		return NULL;
-	}
+	smmu_domain->smmu = NULL;
+	smmu_domain->hyp_domain_id = 0;
 
 	return &smmu_domain->domain;
 }
@@ -245,10 +229,30 @@ static int arm_smmu_kvm_attach_dev(struct iommu_domain *domain,
 		return -ENODEV;
 	}
 
-	/* Domain should already be allocated in domain_alloc_paging */
+	/*
+	 * Lazy EL2 domain allocation: allocate on first device attachment.
+	 * This is deferred from domain_alloc_paging because dev_iommu_priv
+	 * may not be set yet at that point.
+	 */
 	if (!smmu_domain->hyp_domain_id) {
-		dev_err(dev, "domain not allocated at EL2\n");
-		return -EINVAL;
+		smmu_domain->smmu = smmu;
+		smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
+
+		dev_info(dev, "allocating EL2 domain %u on SMMU %u\n",
+			 smmu_domain->hyp_domain_id, smmu->hyp_smmu_id);
+
+		ret = kvm_iommu_alloc_domain(smmu->hyp_smmu_id,
+					     smmu_domain->hyp_domain_id,
+					     IOMMU_DOMAIN_DMA);
+		if (ret) {
+			dev_err(dev, "failed to allocate EL2 domain %u: %d\n",
+				smmu_domain->hyp_domain_id, ret);
+			smmu_domain->hyp_domain_id = 0;
+			smmu_domain->smmu = NULL;
+			return ret;
+		}
+		dev_info(dev, "EL2 domain %u allocated successfully\n",
+			 smmu_domain->hyp_domain_id);
 	}
 
 	/* Get Stream ID from device tree */
@@ -280,8 +284,13 @@ static int arm_smmu_kvm_map_pages(struct iommu_domain *domain,
 	size_t total_mapped = 0;
 	int ret;
 
-	if (!smmu_domain->hyp_domain_id)
+	if (!smmu_domain->hyp_domain_id) {
+		pr_err_ratelimited("map_pages: domain not allocated at EL2\n");
 		return -EINVAL;
+	}
+
+	pr_debug_ratelimited("map_pages: domain=%u iova=0x%lx paddr=0x%llx\n",
+			     smmu_domain->hyp_domain_id, iova, paddr);
 
 	ret = kvm_iommu_map_pages(smmu_domain->hyp_domain_id, iova, paddr,
 				  pgsize, pgcount, prot, gfp, &total_mapped);
@@ -818,6 +827,104 @@ static int kvm_arm_smmu_v2_init(void)
 struct kvm_iommu_driver kvm_smmu_v2_ops = {
 	.init_driver = kvm_arm_smmu_v2_init,
 };
+
+/**
+ * arm_smmu_kvm_enumerate_all_devices - Populate fwspec for ALL devices with iommus property
+ *
+ * This function runs at late_initcall level (after IOMMU framework is ready)
+ * to populate fwspec for all devices with "iommus" property. This is necessary
+ * because:
+ *
+ * 1. MC enumeration (tegra186_mc_enumerate_sids) runs at arch_initcall (~4.4s)
+ * 2. IOMMU framework isn't ready until ~7.6s (iommu->ready flag not set)
+ * 3. MC's iommu_fwspec_init() fails with -517 (EPROBE_DEFER)
+ * 4. sdhci-tegra calls tegra_dev_iommu_get_stream_id() during probe
+ * 5. tegra_dev_iommu_get_stream_id() fails because fwspec is empty
+ *
+ * This function runs after IOMMU is ready, so iommu_fwspec_add_ids() succeeds.
+ * It handles ALL devices, including those with "interconnects" (MC devices).
+ *
+ * Returns: 0 on success, negative error code on failure
+ */
+static int __init arm_smmu_kvm_enumerate_all_devices(void)
+{
+	struct device_node *np;
+	struct of_phandle_args args;
+	int ret;
+	int count = 0;
+
+	if (!is_protected_kvm_enabled()) {
+		pr_debug("arm-smmu-kvm: pKVM not enabled, skipping enumeration\n");
+		return 0;
+	}
+
+	pr_info("arm-smmu-kvm: Enumerating all devices with iommus property\n");
+
+	/* Walk all device nodes with "iommus" property */
+	for_each_node_with_property(np, "iommus") {
+		struct device *dev;
+		struct platform_device *pdev;
+		u32 sid;
+		struct iommu_fwspec *fwspec;
+		bool already_added = false;
+
+		/* Parse iommus property to get Stream ID */
+		ret = of_parse_phandle_with_args(np, "iommus", "#iommu-cells",
+						 0, &args);
+		if (ret) {
+			/* No valid iommus property */
+			continue;
+		}
+
+		/* Extract Stream ID */
+		if (args.args_count < 1) {
+			of_node_put(args.np);
+			continue;
+		}
+		sid = args.args[0];
+		of_node_put(args.np);
+
+		/* Find the platform device for this node */
+		pdev = of_find_device_by_node(np);
+		if (!pdev) {
+			/* Device not yet created, skip */
+			continue;
+		}
+
+		dev = &pdev->dev;
+
+		/* Check if SID already exists in fwspec */
+		fwspec = dev_iommu_fwspec_get(dev);
+		if (fwspec) {
+			int i;
+			for (i = 0; i < fwspec->num_ids; i++) {
+				if (fwspec->ids[i] == sid) {
+					already_added = true;
+					break;
+				}
+			}
+		}
+
+		/* Add SID if not already present */
+		if (!already_added) {
+			ret = iommu_fwspec_add_ids(dev, &sid, 1);
+			if (ret) {
+				dev_dbg(dev, "Failed to add SID 0x%x: %d\n",
+					sid, ret);
+			} else {
+				dev_info(dev, "Early enumeration: added SID 0x%x\n", sid);
+				count++;
+			}
+		}
+
+		platform_device_put(pdev);
+	}
+
+	pr_info("arm-smmu-kvm: Enumerated %d devices\n", count);
+	return 0;
+}
+/* Run after IOMMU is ready, before driver probing completes */
+late_initcall(arm_smmu_kvm_enumerate_all_devices);
 
 /**
  * kvm_arm_smmu_v2_register - Register SMMUv2 driver with pKVM framework
