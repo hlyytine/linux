@@ -438,9 +438,10 @@ int mc_register_sid_mapping(u32 client_id, u32 sid)
 	entry->client_ids[entry->num_clients++] = client_id;
 	entry->sid = sid;
 	entry->active = true;
+	entry->domain_id = 0;  /* Will be set during device attachment */
 
 	/*
-	 * Note: domain_id, cb_idx, and smmu_id are populated later
+	 * Note: cb_idx and smmu_id are populated later
 	 * during device attachment (smmu_v2_attach_dev).
 	 */
 

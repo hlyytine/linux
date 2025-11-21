@@ -180,12 +180,42 @@ static int arm_smmu_kvm_get_stream_id(struct device *dev)
 static struct iommu_domain *arm_smmu_kvm_domain_alloc(struct device *dev)
 {
 	struct arm_smmu_kvm_domain *smmu_domain;
+	struct arm_smmu_kvm_device *smmu;
+	int ret;
 
 	smmu_domain = kzalloc(sizeof(*smmu_domain), GFP_KERNEL);
 	if (!smmu_domain)
 		return NULL;
 
-	/* Domain will be fully initialized in attach_dev */
+	/*
+	 * Initialize domain with Tegra234's supported page size.
+	 * Only 4K pages are supported due to walk cache erratum.
+	 */
+	smmu_domain->domain.pgsize_bitmap = SZ_4K;
+
+	/*
+	 * Allocate domain at EL2 now, not in attach_dev.
+	 * The IOMMU DMA layer may call map_pages before attach_dev,
+	 * so the domain must be fully initialized before returning.
+	 */
+	smmu = dev_iommu_priv_get(dev);
+	if (!smmu) {
+		dev_err(dev, "device not associated with SMMU\n");
+		kfree(smmu_domain);
+		return NULL;
+	}
+
+	smmu_domain->smmu = smmu;
+	smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
+
+	ret = kvm_iommu_alloc_domain(smmu->hyp_smmu_id,
+				     smmu_domain->hyp_domain_id,
+				     IOMMU_DOMAIN_DMA);
+	if (ret) {
+		dev_err(dev, "failed to allocate EL2 domain: %d\n", ret);
+		kfree(smmu_domain);
+		return NULL;
+	}
 
 	return &smmu_domain->domain;
 }
@@ -215,24 +245,16 @@ static int arm_smmu_kvm_attach_dev(struct iommu_domain *domain,
 		return -ENODEV;
 	}
 
+	/* Domain should already be allocated in domain_alloc_paging */
+	if (!smmu_domain->hyp_domain_id) {
+		dev_err(dev, "domain not allocated at EL2\n");
+		return -EINVAL;
+	}
+
 	/* Get Stream ID from device tree */
 	sid = arm_smmu_kvm_get_stream_id(dev);
 	if (sid < 0)
 		return sid;
-
-	/* Allocate domain at EL2 if not already done */
-	if (!smmu_domain->hyp_domain_id) {
-		smmu_domain->hyp_domain_id = arm_smmu_kvm_alloc_domain_id();
-
-		ret = kvm_iommu_alloc_domain(smmu_domain->hyp_domain_id, domain->type);
-		if (ret) {
-			dev_err(dev, "failed to allocate domain at EL2: %d\n", ret);
-			smmu_domain->hyp_domain_id = 0;
-			return ret;
-		}
-
-		smmu_domain->smmu = smmu;
-	}
 
 	/* Attach device to domain at EL2 */
 	ret = kvm_iommu_attach_dev(smmu->hyp_smmu_id, smmu_domain->hyp_domain_id,
@@ -389,60 +411,43 @@ static void arm_smmu_kvm_release_device(struct device *dev)
 }
 
 /*
- * Stream ID Registration: MC-Based Architecture
- * ==============================================
+ * of_xlate callback: Translate device tree "iommus" property to Stream ID
  *
- * This driver uses the Memory Controller (MC) to register Stream ID assignments
- * with EL2 during early boot, solving the chicken-and-egg problem where devices
- * need Stream IDs BEFORE they can probe.
+ * This callback is called by the IOMMU framework when parsing device tree
+ * for devices with "iommus" property. It extracts the Stream ID from the
+ * device tree and adds it to the device's iommu_fwspec.
  *
- * Architecture:
- * -------------
- * 1. MC Driver Early Init (arch_initcall, ~0.05s):
- *    - tegra186_mc_enumerate_sids() walks ALL device tree nodes
- *    - For each device with "iommus" + "interconnects" properties:
- *      * Extracts Stream ID from "iommus" property
- *      * Extracts MC client ID from "interconnects" property
- *      * Calls kvm_call_hyp_nvhe(__pkvm_mc_register_sid, client_id, sid)
- *    - EL2 records SID→client mapping in sid_map[] array
- *    - This happens BEFORE any device probing begins
- *
- * 2. SMMU Stub Registration (subsys_initcall_sync, ~0.11s):
- *    - This driver binds to SMMU devices
- *    - Registers with IOMMU framework
- *    - NO of_xlate callback needed (MC already registered SIDs!)
- *
- * 3. Device Attachment (device probe time, ~6s for MMC):
- *    - Device driver calls iommu_attach_device()
- *    - arm_smmu_kvm_attach_dev() is invoked
- *    - Extracts SID from device tree via arm_smmu_kvm_get_stream_id()
- *    - Calls kvm_iommu_attach_dev() hypercall
- *    - EL2 validates SID was pre-registered for this client
- *    - Attachment succeeds (MC validation passes)
- *
- * Key Benefits:
- * -------------
- * - No chicken-and-egg: SIDs registered BEFORE devices probe
- * - MC SID override validation works: EL2 knows expected assignments
- * - MMC boots successfully: Has Stream ID when needed
- * - Suspend/resume safe: MC re-programs SIDs, EL2 validates all writes
- *
- * See drivers/memory/tegra/tegra186.c::tegra186_mc_enumerate_sids()
- * See drivers/iommu/arm/arm-smmu/pkvm/tegra234-mc.c::mc_register_sid_mapping()
+ * Note: IOMMU devices are registered in arm_smmu_kvm_device_probe() before
+ * device probing begins (subsys_initcall_sync level), so the IOMMU framework
+ * is ready when devices start probing.
  */
+static int arm_smmu_kvm_of_xlate(struct device *dev, const struct of_phandle_args *args)
+{
+	u32 sid;
 
-/*
- * Note: No of_xlate callback needed! Stream IDs are registered early by
- * the MC driver (tegra186_mc_enumerate_sids) during arch_initcall, and
- * extracted directly from device tree during attach_dev via
- * arm_smmu_kvm_get_stream_id(). This eliminates the chicken-and-egg
- * problem where devices need Stream IDs before probing.
- */
+	if (args->args_count < 1) {
+		dev_err(dev, "of_xlate: missing Stream ID in iommus property\n");
+		return -EINVAL;
+	}
+
+	sid = args->args[0];
+
+	if (sid > 255) {
+		dev_err(dev, "of_xlate: invalid Stream ID 0x%x (max 255)\n", sid);
+		return -EINVAL;
+	}
+
+	dev_dbg(dev, "of_xlate: Adding SID 0x%x to fwspec\n", sid);
+
+	return iommu_fwspec_add_ids(dev, &sid, 1);
+}
 
 static const struct iommu_ops arm_smmu_kvm_ops = {
 	.domain_alloc_paging	= arm_smmu_kvm_domain_alloc,
 	.probe_device		= arm_smmu_kvm_probe_device,
 	.release_device		= arm_smmu_kvm_release_device,
+	.device_group		= generic_device_group,
+	.of_xlate		= arm_smmu_kvm_of_xlate,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
 		.attach_dev	= arm_smmu_kvm_attach_dev,
@@ -555,39 +560,25 @@ static int arm_smmu_kvm_device_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	/*
-	 * CRITICAL: Set driver data BEFORE iommu_device_register()!
-	 * iommu_device_register() can trigger probe_device() callbacks
-	 * for devices that are probing simultaneously at early boot.
-	 * probe_device() needs to access the SMMU via platform_get_drvdata().
-	 */
+	/* Set driver data before registering IOMMU device */
 	platform_set_drvdata(pdev, smmu);
 
+	/*
+	 * Register with IOMMU framework NOW (not in late_initcall).
+	 * This must happen before devices probe to avoid registration
+	 * failing when groups already have attached devices.
+	 */
 	ret = iommu_device_register(&smmu->iommu, &arm_smmu_kvm_ops, dev);
-	if (ret && ret != -EPROBE_DEFER) {
-		/*
-		 * Fatal error - fail probe.
-		 * Note: -EPROBE_DEFER is expected at early boot (0.11s) when
-		 * some device dependencies aren't ready yet. Accept it as
-		 * partial success - the bus notifier will retry device
-		 * configuration when devices become ready.
-		 */
+	if (ret) {
 		dev_err(dev, "failed to register IOMMU device: %d\n", ret);
-		goto err_sysfs_remove;
+		iommu_device_sysfs_remove(&smmu->iommu);
+		return ret;
 	}
 
-	if (ret == -EPROBE_DEFER) {
-		dev_info(dev, "IOMMU registered with deferred device probing (expected at early boot)\n");
-	}
-
-	dev_info(dev, "pKVM ARM SMMUv2 driver initialized (hyp_id=%u, base=0x%llx)\n",
+	dev_info(dev, "pKVM ARM SMMUv2 driver initialized and registered (hyp_id=%u, base=0x%llx)\n",
 		 smmu->hyp_smmu_id, (u64)smmu->base);
 
 	return 0;
-
-err_sysfs_remove:
-	iommu_device_sysfs_remove(&smmu->iommu);
-	return ret;
 }
 
 static void arm_smmu_kvm_device_remove(struct platform_device *pdev)
@@ -891,93 +882,6 @@ out_err:
 	return ret;
 }
 
-/**
- * arm_smmu_kvm_enumerate_devices - Enumerate devices with direct SMMU connection
- *
- * Walks device tree to find devices with "iommus" but no "interconnects" property.
- * These are non-MC devices (e.g., GPCDMA) that connect directly to SMMU.
- * Populates fwspec early so device drivers can query stream ID during probe.
- *
- * Similar to tegra186_mc_enumerate_sids() but for non-MC devices.
- */
-static void __init arm_smmu_kvm_enumerate_devices(void)
-{
-	struct device_node *np;
-	struct of_phandle_args args;
-	int ret;
-
-	/* Walk all device tree nodes */
-	for_each_node_with_property(np, "iommus") {
-		/* Skip if device has interconnects property (MC will handle it) */
-		if (of_property_read_bool(np, "interconnects"))
-			continue;
-
-		/* Parse iommus property to get Stream ID */
-		ret = of_parse_phandle_with_args(np, "iommus", "#iommu-cells", 0, &args);
-		if (ret) {
-			pr_debug("arm-smmu-kvm: Failed to parse iommus for %pOF: %d\n", np, ret);
-			continue;
-		}
-
-		/* Only handle SMMUs we own (arm,mmu-500 or nvidia,tegra234-smmu) */
-		if (!of_device_is_compatible(args.np, "arm,mmu-500") &&
-		    !of_device_is_compatible(args.np, "nvidia,tegra234-smmu")) {
-			of_node_put(args.np);
-			continue;
-		}
-
-		/* Get platform device for this node */
-		struct platform_device *pdev = of_find_device_by_node(np);
-		if (!pdev) {
-			of_node_put(args.np);
-			continue;
-		}
-
-		struct device *dev = &pdev->dev;
-
-		/* Initialize fwspec if needed */
-		ret = iommu_fwspec_init(dev, &args.np->fwnode);
-		if (ret && ret != -EEXIST) {
-			pr_warn("arm-smmu-kvm: Failed to init fwspec for %pOF: %d\n", np, ret);
-			platform_device_put(pdev);
-			of_node_put(args.np);
-			continue;
-		}
-
-		/* Add Stream ID to fwspec (with de-duplication) */
-		if (args.args_count > 0) {
-			u32 sid = args.args[0];
-			struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
-			bool already_added = false;
-
-			/* Check if already added (avoid duplicates) */
-			if (fwspec) {
-				int i;
-				for (i = 0; i < fwspec->num_ids; i++) {
-					if (fwspec->ids[i] == sid) {
-						already_added = true;
-						break;
-					}
-				}
-			}
-
-			if (!already_added) {
-				ret = iommu_fwspec_add_ids(dev, &sid, 1);
-				if (ret) {
-					pr_warn("arm-smmu-kvm: Failed to add SID 0x%x for %pOF: %d\n",
-						sid, np, ret);
-				} else {
-					pr_info("arm-smmu-kvm: Added SID 0x%x to fwspec for %pOF (non-MC device)\n",
-						sid, np);
-				}
-			}
-		}
-
-		platform_device_put(pdev);
-		of_node_put(args.np);
-	}
-}
-
 /* Register early, before KVM initialization */
 subsys_initcall(kvm_arm_smmu_v2_register);
 
@@ -1003,11 +907,11 @@ static int __init arm_smmu_kvm_init(void)
 	pr_info("arm-smmu-kvm: Platform driver registered successfully\n");
 
 	/*
-	 * Enumerate devices with direct SMMU connection (no MC).
-	 * This populates fwspec early for devices like GPCDMA that need
-	 * stream ID during their probe function.
+	 * NOTE: We no longer need arm_smmu_kvm_enumerate_devices() here.
+	 * The of_xlate callback will be invoked automatically by the IOMMU
+	 * framework when we register IOMMU devices in late_initcall.
+	 * This avoids -EPROBE_DEFER issues from devices not yet probed.
 	 */
-	arm_smmu_kvm_enumerate_devices();
 
 	return 0;
 }
@@ -1033,6 +937,12 @@ static void __exit arm_smmu_kvm_exit(void)
 	platform_driver_unregister(&arm_smmu_kvm_driver);
 }
 module_exit(arm_smmu_kvm_exit);
+
+/*
+ * NOTE: arm_smmu_kvm_late_register() was removed.
+ * IOMMU devices are now registered directly in arm_smmu_kvm_device_probe()
+ * to avoid registration failure when groups already have attached devices.
+ */
 
 MODULE_DESCRIPTION("ARM SMMUv2 EL1 stub driver for pKVM (Tegra234)");
 MODULE_AUTHOR("NVIDIA Corporation");

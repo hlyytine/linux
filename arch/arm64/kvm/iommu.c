@@ -134,10 +134,10 @@ int kvm_iommu_detach_dev(pkvm_handle_t iommu_id, pkvm_handle_t domain_id,
 }
 EXPORT_SYMBOL(kvm_iommu_detach_dev);
 
-int kvm_iommu_alloc_domain(pkvm_handle_t domain_id, int type)
+int kvm_iommu_alloc_domain(pkvm_handle_t iommu_id, pkvm_handle_t domain_id, int type)
 {
 	return kvm_call_hyp_nvhe_mc(__pkvm_host_iommu_alloc_domain,
-				    domain_id, type);
+				    iommu_id, domain_id, type);
 }
 EXPORT_SYMBOL(kvm_iommu_alloc_domain);
 

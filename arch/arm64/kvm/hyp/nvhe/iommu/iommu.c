@@ -282,6 +282,7 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 {
 	int ret = 0;
 	struct kvm_hyp_iommu_domain *domain;
+	int old_refs;
 
 	if (!kvm_iommu_ops || !kvm_iommu_ops->free_domain)
 		return -ENODEV;
@@ -291,8 +292,23 @@ int kvm_iommu_free_domain(pkvm_handle_t domain_id)
 		return -EINVAL;
 
 	hyp_spin_lock(&kvm_iommu_domain_lock);
-	if (WARN_ON(atomic_cmpxchg_acquire(&domain->refs, 1, 0) != 1)) {
-		ret = -EINVAL;
+
+	/*
+	 * Check reference count before freeing:
+	 * - refs == 0: Domain was never successfully allocated (alloc failed),
+	 *              nothing to free, just return success
+	 * - refs == 1: Normal case, proceed with freeing
+	 * - refs > 1:  Domain still has references (devices attached or other
+	 *              holders), cannot free yet
+	 */
+	old_refs = atomic_cmpxchg_acquire(&domain->refs, 1, 0);
+	if (old_refs == 0) {
+		/* Domain was never successfully allocated, nothing to free */
+		goto out_unlock;  /* Return success (ret = 0) */
+	}
+	if (old_refs != 1) {
+		/* Domain still has active references, cannot free */
+		ret = -EBUSY;
 		goto out_unlock;
 	}
 

@@ -1838,6 +1838,10 @@ int smmu_v2_map_stream(struct hyp_arm_smmu_v2_device *smmu, u32 sid, u8 cb_idx)
 	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_SMR(sme_idx), smr_val);
 	smmu_writel(smmu, ARM_SMMU_GR0, ARM_SMMU_GR0_S2CR(sme_idx), s2cr_val);
 
+	/* Log stream mapping configuration */
+	HYP_INFO("SMMU[%u]: S2CR[%u] = SID 0x%x -> CB%u, TYPE=TRANS\n",
+		 smmu->id, sme_idx, sid, cb_idx);
+
 	/* Update hardware state tracking */
 	smmu->smrs_hw[sme_idx].id = (u16)sid;
 	smmu->smrs_hw[sme_idx].mask = 0;
@@ -2089,8 +2093,16 @@ int smmu_v2_assign_sid(u32 smmu_id, u32 sid, u32 client_id, pkvm_handle_t domain
 
 	entry = &sid_map[sid];
 
-	/* Check if already assigned to a different domain */
-	if (entry->active && entry->domain_id != domain_id)
+	/*
+	 * Check if already assigned to a different domain.
+	 * Allow assignment if:
+	 * - Not active yet (first assignment)
+	 * - Same domain (idempotent)
+	 * - Current domain is 0 (registered by MC but not yet attached)
+	 */
+	if (entry->active &&
+	    entry->domain_id != 0 &&
+	    entry->domain_id != domain_id)
 		return -EBUSY;
 
 	/*
@@ -2161,6 +2173,9 @@ int smmu_v2_alloc_domain(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *do
 	struct smmu_v2_domain *smmu_domain;
 	u8 cb_idx;
 	int ret;
+
+	HYP_INFO("smmu_v2_alloc_domain: iommu_id=%u domain_id=%u type=%d\n",
+		 iommu_id, domain->domain_id, type);
 
 	/* Validate SMMU instance ID */
 	if (iommu_id >= kvm_hyp_arm_smmu_v2_count) {
@@ -2298,6 +2313,10 @@ int smmu_v2_attach_dev(pkvm_handle_t iommu_id, struct kvm_hyp_iommu_domain *doma
 			smmu->id, sid, ARM_SMMU_MAX_SIDS - 1);
 		return -EINVAL;
 	}
+
+	/* Log device attachment attempt */
+	HYP_INFO("SMMU[%u]: Attaching device SID 0x%x to domain %u (CB%u)\n",
+		 smmu->id, sid, domain->domain_id, cb_idx);
 
 	/* Configure stream mapping (SMR+S2CR) */
 	ret = smmu_v2_map_stream(smmu, sid, cb_idx);

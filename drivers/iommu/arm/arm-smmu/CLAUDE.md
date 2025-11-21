@@ -27,6 +27,21 @@ This section documents the architecture and implementation plan for adding pKVM 
 
 **Target**: Tegra234 (Orin AGX) only - no support for other SoCs needed
 
+### Development Workflow Rules
+
+**IMPORTANT**: After every successful kernel build, ALWAYS:
+1. Make a git commit describing:
+   - What change was made
+   - Why (the problem being investigated)
+   - What we're trying to figure out
+2. Then submit for autopilot testing
+
+**When analyzing test results** (to understand why a fix worked or didn't):
+- Check git history (`git log --oneline -10`) to understand previous attempts
+- This helps avoid repeating failed approaches
+
+This ensures reproducibility and helps track debugging progress across sessions.
+
 ### Architecture
 
 #### Tegra234 SMMU Instances
