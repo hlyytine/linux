@@ -250,18 +250,21 @@ int kvm_iommu_alloc_domain(pkvm_handle_t iommu_id, pkvm_handle_t domain_id, int 
 	int ret = -EINVAL;
 	struct kvm_hyp_iommu_domain *domain;
 
+	HYP_INFO("alloc_domain: entry iommu=%u domain=%u type=%d ops=%p",
+		 iommu_id, domain_id, type, kvm_iommu_ops);
+
 	if (!kvm_iommu_ops) {
-		HYP_ERR("kvm_iommu_alloc_domain: kvm_iommu_ops is NULL");
+		HYP_ERR("alloc_domain: kvm_iommu_ops is NULL");
 		return -ENODEV;
 	}
 	if (!kvm_iommu_ops->alloc_domain) {
-		HYP_ERR("kvm_iommu_alloc_domain: alloc_domain callback is NULL");
+		HYP_ERR("alloc_domain: alloc_domain callback is NULL");
 		return -ENODEV;
 	}
 
 	domain = handle_to_domain(domain_id);
 	if (!domain) {
-		HYP_ERR("kvm_iommu_alloc_domain: domain_id %u >= MAX_DOMAINS", domain_id);
+		HYP_ERR("alloc_domain: domain_id %u >= MAX_DOMAINS", domain_id);
 		return -ENOMEM;
 	}
 
