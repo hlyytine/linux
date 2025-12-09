@@ -1809,6 +1809,7 @@ static void handle___pkvm_host_hvc_pd(struct kvm_cpu_context *host_ctxt)
 	cpu_reg(host_ctxt, 1) = pkvm_host_hvc_pd(device_id, on);
 }
 
+#ifdef CONFIG_ARM_SMMU_V2_PKVM
 /* Forward declaration for MC SID registration (defined in tegra234-mc.c) */
 int mc_register_sid_mapping(u32 client_id, u32 sid);
 
@@ -1821,6 +1822,7 @@ static void handle___pkvm_mc_register_sid(struct kvm_cpu_context *host_ctxt)
 	ret = mc_register_sid_mapping(client_id, sid);
 	hyp_reqs_smccc_encode(ret, host_ctxt, this_cpu_ptr(&host_hyp_reqs));
 }
+#endif
 
 typedef void (*hcall_t)(struct kvm_cpu_context *);
 
@@ -1901,7 +1903,9 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__pkvm_host_iommu_set_identity),
 	HANDLE_FUNC(__pkvm_host_iommu_map_sg),
 	HANDLE_FUNC(__pkvm_host_hvc_pd),
+#ifdef CONFIG_ARM_SMMU_V2_PKVM
 	HANDLE_FUNC(__pkvm_mc_register_sid),
+#endif
 };
 
 static void handle_host_hcall(struct kvm_cpu_context *host_ctxt)
